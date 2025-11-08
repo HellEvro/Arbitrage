@@ -54,33 +54,74 @@ function formatSymbol(symbol) {
 function createExchangeLink(exchange, symbol) {
   // Разделяем символ на BASE/USDT для правильных ссылок
   let urlSymbol = symbol;
-  if (symbol && symbol.toUpperCase().endsWith("USDT")) {
-    const base = symbol.slice(0, -4);
-    const quote = "USDT";
+  const exchangeLower = exchange.toLowerCase();
+  
+  if (!symbol) {
+    return `<span>${exchange}</span>`;
+  }
+  
+  // Нормализуем символ: убираем лишние дефисы и пробелы
+  symbol = symbol.trim().toUpperCase();
+  
+  if (symbol.endsWith("USDT")) {
+    // Проверяем, есть ли уже дефис в символе (для KuCoin и OKX)
+    const hasHyphen = symbol.includes("-");
     
-    // Формируем правильные ссылки для каждой биржи
-    switch (exchange.toLowerCase()) {
-      case "bybit":
-        urlSymbol = `${base}/${quote}`;
-        break;
-      case "mexc":
-        urlSymbol = `${base}_${quote}`;
-        break;
-      case "bitget":
-        urlSymbol = symbol; // Bitget использует формат без разделителя
-        break;
-      case "okx":
-        urlSymbol = `${base}-${quote}`;
-        break;
-      case "kucoin":
-        urlSymbol = `${base}-${quote}`;
-        break;
-      default:
-        urlSymbol = symbol;
+    if (hasHyphen && (exchangeLower === "kucoin" || exchangeLower === "okx")) {
+      // Символ уже в правильном формате (например, "CELB-USDT")
+      // Но нужно проверить, нет ли двойного дефиса
+      urlSymbol = symbol.replace(/--+/g, "-"); // Заменяем множественные дефисы на один
+    } else if (hasHyphen) {
+      // Символ с дефисом, но не для KuCoin/OKX - нужно преобразовать
+      const parts = symbol.split("-");
+      if (parts.length === 2 && parts[1] === "USDT") {
+        // Формат "BASE-USDT" - преобразуем в нужный формат для биржи
+        const base = parts[0];
+        switch (exchangeLower) {
+          case "bybit":
+            urlSymbol = `${base}/USDT`;
+            break;
+          case "mexc":
+            urlSymbol = `${base}_USDT`;
+            break;
+          case "bitget":
+            urlSymbol = `${base}USDT`; // Bitget использует формат без разделителя
+            break;
+          default:
+            urlSymbol = symbol.replace(/--+/g, "-"); // Убираем двойные дефисы
+        }
+      } else {
+        urlSymbol = symbol.replace(/--+/g, "-"); // Убираем двойные дефисы
+      }
+    } else {
+      // Символ без дефиса (например, "CELBUSDT")
+      const base = symbol.slice(0, -4);
+      const quote = "USDT";
+      
+      // Формируем правильные ссылки для каждой биржи
+      switch (exchangeLower) {
+        case "bybit":
+          urlSymbol = `${base}/${quote}`;
+          break;
+        case "mexc":
+          urlSymbol = `${base}_${quote}`;
+          break;
+        case "bitget":
+          urlSymbol = symbol; // Bitget использует формат без разделителя
+          break;
+        case "okx":
+          urlSymbol = `${base}-${quote}`;
+          break;
+        case "kucoin":
+          urlSymbol = `${base}-${quote}`;
+          break;
+        default:
+          urlSymbol = symbol;
+      }
     }
   }
   
-  const resolver = tradeUrlResolvers[exchange.toLowerCase()];
+  const resolver = tradeUrlResolvers[exchangeLower];
   const url = resolver ? resolver(urlSymbol) : `https://${exchange}.com/trade/${urlSymbol}`;
   return `<a href="${url}" target="_blank" rel="noopener noreferrer">${exchange}</a>`;
 }
@@ -284,15 +325,15 @@ function renderOpportunities(opportunities) {
           message = "Сервера недоступны";
         } else if (!hasAnyData) {
           // Если биржи подключены, но данных еще нет - идет загрузка
-          message = "Идет загрузка данных...";
+          message = "Загрузка монет!";
         } else if (!hasEnoughExchanges) {
           // Если есть данные только с одной биржи - недостаточно для арбитража
           message = "Ожидание данных с других бирж...";
-        } else if (!state.hasReceivedData) {
-          // Если есть данные с нескольких бирж, но еще не получены возможности - идет загрузка
-          message = "Идет загрузка данных...";
+        } else {
+          // Если есть данные с нескольких бирж - показываем загрузку, пока не найдены возможности
+          // Показываем "Загрузка монет!" если биржи получают данные, но возможности еще не найдены
+          message = "Загрузка монет!";
         }
-        // Если hasEnoughExchanges && hasReceivedData - показываем "Нет данных" (нет возможностей арбитража)
       } else if (!state.hasReceivedData && socket.connected) {
         // Если статусы бирж еще не загружены, но WebSocket подключен - идет загрузка
         message = "Идет загрузка данных...";
@@ -417,8 +458,10 @@ function renderOpportunities(opportunities) {
         message = "Сервера недоступны";
       } else if (!hasEnoughExchanges) {
         message = "Ожидание данных с других бирж...";
+      } else {
+        // Если есть данные с нескольких бирж, но после фильтрации нет возможностей - показываем загрузку
+        message = "Загрузка монет!";
       }
-      // Если hasEnoughExchanges - показываем "Нет данных" (нет возможностей арбитража после фильтрации)
     }
     
     html = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
@@ -552,7 +595,10 @@ socket.on("opportunities", (data) => {
   if (state.frozen) {
     return; // Не обновляем, если зафиксировано
   }
-  console.log("Received opportunities via WebSocket:", data?.length || 0);
+  console.log("Received opportunities via WebSocket:", data?.length || 0, "opportunities");
+  if (data && data.length > 0) {
+    console.log("First opportunity sample:", data[0]);
+  }
   state.opportunities = data || [];
   state.hasReceivedData = true; // Отмечаем, что данные получены
   renderOpportunities(state.opportunities);

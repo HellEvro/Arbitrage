@@ -28,7 +28,8 @@ class MexcAdapter(BaseAdapter):
         self._markets_cache_time: float = 0.0
         self._markets_cache_ttl: float = 600.0  # Кэш на 10 минут
         self._last_403_time: float = 0.0
-        self._403_cooldown: float = 300.0  # Не пытаться 5 минут после 403
+        self._403_cooldown: float = 60.0  # 60 секунд после 403
+        self._request_delay: float = 1.0  # Задержка между запросами
 
     async def _ensure_cookies(self) -> None:
         """Visit main page to get cookies for Cloudflare protection."""
@@ -50,7 +51,7 @@ class MexcAdapter(BaseAdapter):
                         for cookie_name, cookie_obj in resp.cookies.items():
                             self._cookies[cookie_name] = cookie_obj.value if hasattr(cookie_obj, 'value') else str(cookie_obj)
                         self._cookies_initialized = True
-                        self._log.debug("Got %d cookies from MEXC: %s", len(self._cookies), list(self._cookies.keys()))
+                        self._log.debug("Got %d cookies from MEXC: %s", len(self._cookies), list(self._cookies.keys())[:5])
                     else:
                         self._log.warning("Failed to get cookies, status: %d", resp.status)
         except Exception as e:
@@ -69,9 +70,11 @@ class MexcAdapter(BaseAdapter):
         
         # Проверяем cooldown после 403
         if (current_time - self._last_403_time) < self._403_cooldown:
-            self._log.debug("MEXC still in 403 cooldown, using cached markets or returning empty")
+            # ВАЖНО: Возвращаем кэш даже если он старый - лучше старые данные чем никаких
             if self._markets_cache is not None:
+                self._log.debug("MEXC still in 403 cooldown, returning cached markets (%d markets)", len(self._markets_cache))
                 return self._markets_cache
+            self._log.warning("MEXC in cooldown and no cache available - returning empty")
             return []
         
         self._log.info("Fetching markets from MEXC")
@@ -79,8 +82,9 @@ class MexcAdapter(BaseAdapter):
         await self._ensure_cookies()
         
         import asyncio
-        await asyncio.sleep(1.0)  # Увеличил задержку для избежания блокировок
+        await asyncio.sleep(self._request_delay)  # Задержка для избежания блокировок
         
+        # Правильные заголовки для обхода Cloudflare
         mexc_headers = {
             "Referer": "https://www.mexc.com/exchange/BTC_USDT",
             "Origin": "https://www.mexc.com",
@@ -91,10 +95,10 @@ class MexcAdapter(BaseAdapter):
             "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
         }
         
-        # Try multiple endpoints/domains
+        # Try multiple endpoints/domains - альтернативный первым
         endpoints = [
+            f"{self._REST_ALT_BASE}/exchangeInfo",  # Альтернативный домен первым
             f"{self._REST_BASE}/api/v3/exchangeInfo",
-            f"{self._REST_ALT_BASE}/exchangeInfo",
         ]
         
         data = None
@@ -102,14 +106,19 @@ class MexcAdapter(BaseAdapter):
         for endpoint in endpoints:
             try:
                 self._log.debug("Trying MEXC endpoint: %s", endpoint)
-                data = await self._http.get_json(endpoint, extra_headers=mexc_headers, max_retries=1, cookies=self._cookies)  # Don't retry on 403
+                data = await self._http.get_json(endpoint, extra_headers=mexc_headers, max_retries=1, cookies=self._cookies if self._cookies else None)  # Don't retry on 403
                 break  # Success
             except Exception as e:
                 last_error = e
-                # Check if it's a 403 error - don't retry other endpoints if 403
+                # Пробуем все endpoints даже при 403 - может альтернативный домен работает
                 if hasattr(e, 'status') and e.status == 403:
-                    self._log.warning("MEXC endpoint %s returned 403 Forbidden - skipping other endpoints", endpoint)
-                    break  # Don't try other endpoints if 403
+                    self._log.debug("MEXC endpoint %s returned 403 Forbidden - trying next endpoint", endpoint)
+                    # Продолжаем пробовать другие endpoints
+                    if endpoint == endpoints[-1]:
+                        # Это был последний endpoint
+                        break
+                    await asyncio.sleep(0.5)  # Delay between retries
+                    continue
                 self._log.debug("Endpoint %s failed: %s", endpoint, e)
                 if endpoint == endpoints[-1]:
                     # Last endpoint failed, try fallback
@@ -124,9 +133,12 @@ class MexcAdapter(BaseAdapter):
                 import time
                 self._last_403_time = time.time()
                 self._log.warning("MEXC API returned 403 Forbidden - IP may be blocked. Skipping ticker24hr fallback. Cooldown: %d seconds", self._403_cooldown)
-                # Return cached markets if available, otherwise empty list
+                # ВАЖНО: Возвращаем кэш даже если он старый - лучше старые данные чем никаких
                 if self._markets_cache is not None:
+                    self._log.info("Returning cached MEXC markets (%d markets) despite 403 error", len(self._markets_cache))
                     return self._markets_cache
+                # Если кэша нет, возвращаем пустой список - market_discovery пропустит MEXC
+                self._log.warning("No cached markets available for MEXC - will be excluded from discovery")
                 return []
             
             if last_error:
@@ -136,7 +148,7 @@ class MexcAdapter(BaseAdapter):
                     f"{self._REST_BASE}/api/v3/ticker/24hr",
                     extra_headers=mexc_headers,
                     max_retries=1,  # Don't retry on 403
-                    cookies=self._cookies
+                    cookies=self._cookies if self._cookies else None
                 )
                 markets: list[ExchangeMarket] = []
                 seen_symbols = set()
@@ -201,16 +213,12 @@ class MexcAdapter(BaseAdapter):
         await self._ensure_cookies()
         
         import asyncio
-        await asyncio.sleep(0.5)  # Initial delay
+        await asyncio.sleep(self._request_delay)  # Initial delay
         
+        # Минимальные заголовки для quote stream
         mexc_headers = {
-            "Referer": "https://www.mexc.com/exchange/BTC_USDT",
-            "Origin": "https://www.mexc.com",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
         }
         consecutive_403_errors = 0
         max_403_errors = 3  # After 3 consecutive 403 errors, wait longer
@@ -224,6 +232,15 @@ class MexcAdapter(BaseAdapter):
         
         while not self.closed:
             try:
+                # Check cooldown after 403
+                import time
+                current_time = time.time()
+                if (current_time - self._last_403_time) < self._403_cooldown:
+                    wait_time = self._403_cooldown - (current_time - self._last_403_time)
+                    self._log.debug("MEXC still in 403 cooldown, waiting %.1f seconds", wait_time)
+                    await asyncio.sleep(min(wait_time, 60.0))  # Wait up to 60 seconds at a time
+                    continue
+                
                 # Ensure cookies are fresh before each request
                 if not self._cookies_initialized:
                     await self._ensure_cookies()
@@ -233,12 +250,16 @@ class MexcAdapter(BaseAdapter):
                 else:
                     self._log.warning("No cookies available, request may fail")
                 
+                # Add delay before request to avoid rate limiting
+                # Longer delay helps avoid Cloudflare blocks
+                await asyncio.sleep(self._request_delay)
+                
                 # Request all tickers - MEXC supports this endpoint
+                # Don't pass cookies - let HttpClientFactory handle headers
                 data = await self._http.get_json(
                     quote_endpoint,
                     extra_headers=mexc_headers,
-                    max_retries=1,  # Don't retry on 403
-                    cookies=self._cookies if self._cookies else None
+                    max_retries=1  # Don't retry on 403
                 )
                 consecutive_403_errors = 0  # Reset counter on success
                 
@@ -252,6 +273,8 @@ class MexcAdapter(BaseAdapter):
                 # Check if it's a 403 error
                 is_403 = hasattr(e, 'status') and e.status == 403
                 if is_403:
+                    import time
+                    self._last_403_time = time.time()
                     consecutive_403_errors += 1
                     # Refresh cookies on 403 - they might have expired
                     self._cookies_initialized = False
@@ -260,21 +283,21 @@ class MexcAdapter(BaseAdapter):
                     if consecutive_403_errors >= max_403_errors:
                         self._log.warning(
                             "MEXC returned %d consecutive 403 errors - IP may be blocked. "
-                            "Waiting 60 seconds before retry.",
-                            consecutive_403_errors
+                            "Cooldown: %d seconds",
+                            consecutive_403_errors,
+                            int(self._403_cooldown)
                         )
-                        await asyncio.sleep(60.0)  # Wait 60 seconds before retry
-                        consecutive_403_errors = 0  # Reset after long wait
-                        self._cookies_initialized = False  # Refresh cookies
-                        await self._ensure_cookies()
+                        # Don't wait here - let cooldown check handle it
+                        consecutive_403_errors = 0  # Reset after reaching max
                     else:
+                        wait_time = self._request_delay * (consecutive_403_errors + 1)
                         self._log.warning(
-                            "MEXC returned 403 Forbidden (consecutive: %d/%d). Refreshing cookies and waiting %d seconds.",
+                            "MEXC returned 403 Forbidden (consecutive: %d/%d). Refreshing cookies and waiting %.1f seconds.",
                             consecutive_403_errors,
                             max_403_errors,
-                            self._poll_interval * 2
+                            wait_time
                         )
-                        await asyncio.sleep(self._poll_interval * 2)  # Wait longer on 403
+                        await asyncio.sleep(wait_time)  # Exponential backoff
                 else:
                     consecutive_403_errors = 0  # Reset on non-403 errors
                     self._log.error("Failed to fetch quotes from MEXC: %s", e)

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 from arbitrage_bot.bootstrap import build_app_components
 from arbitrage_bot.config import load_settings
 from arbitrage_bot.core.app_runner import AppRunner
-from arbitrage_bot.core.port_cleanup import cleanup_port, find_process_on_port, is_python_process
+from arbitrage_bot.core.port_cleanup import cleanup_port, find_process_on_port, is_python_process, is_process_running
 from arbitrage_bot.web import create_app
 import time
 
@@ -47,13 +48,22 @@ async def main() -> None:
         log.error("FAILED to clean up port %d after %d attempts. Aborting startup!", port, max_cleanup_attempts)
         raise RuntimeError(f"Port {port} is still in use and could not be freed. Please manually terminate processes.")
     
-    # Final verification - port must be free
+    # Final verification - port must be free (excluding current process)
+    current_pid = os.getpid()
     final_check = find_process_on_port(port)
     if final_check:
-        final_python = [pid for pid in final_check if is_python_process(pid)]
-        if final_python:
-            log.error("Port %d verification failed - still has Python processes: %s", port, final_python)
-            raise RuntimeError(f"Port {port} verification failed - processes still running: {final_python}")
+        # Исключаем текущий процесс из проверки
+        final_check_filtered = [pid for pid in final_check if pid > 0 and pid != current_pid]
+        if final_check_filtered:
+            # Проверяем, действительно ли процессы еще работают
+            final_python = [pid for pid in final_check_filtered if is_python_process(pid) and is_process_running(pid)]
+            if final_python:
+                log.error("Port %d verification failed - still has running Python processes: %s", port, final_python)
+                raise RuntimeError(f"Port {port} verification failed - processes still running: {final_python}")
+            else:
+                log.info("Port %d has PIDs but they are not running Python processes (likely TIME_WAIT): %s", port, final_check_filtered)
+        else:
+            log.debug("Port %d final check: only current process found (OK)", port)
     
     log.info("Port %d verified free - proceeding with startup", port)
     

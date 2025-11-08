@@ -205,9 +205,29 @@ def create_app(
             
             # Send opportunities immediately
             opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-            payload = [asdict(opp) for opp in opportunities]
+            payload = [
+                {
+                    "symbol": opp.symbol,
+                    "buy_exchange": opp.buy_exchange,
+                    "buy_price": opp.buy_price,
+                    "buy_symbol": opp.buy_symbol,
+                    "buy_fee_pct": opp.buy_fee_pct,
+                    "sell_exchange": opp.sell_exchange,
+                    "sell_price": opp.sell_price,
+                    "sell_symbol": opp.sell_symbol,
+                    "sell_fee_pct": opp.sell_fee_pct,
+                    "spread_usdt": opp.spread_usdt,
+                    "spread_pct": opp.spread_pct,
+                    "gross_profit_usdt": opp.gross_profit_usdt,
+                    "total_fees_usdt": opp.total_fees_usdt,
+                    "timestamp_ms": opp.timestamp_ms,
+                }
+                for opp in opportunities
+            ]
             socketio.emit("opportunities", payload)
-            log.debug("Sent %d initial opportunities to client", len(payload))
+            log.info("Sent %d initial opportunities to client via WebSocket", len(payload))
+            if payload:
+                log.debug("First opportunity sample: %s", payload[0])
             
             # Send exchange status immediately
             if aggregator:
@@ -239,9 +259,30 @@ def create_app(
             try:
                 while True:
                     opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-                    payload = [asdict(opp) for opp in opportunities]
+                    payload = [
+                        {
+                            "symbol": opp.symbol,
+                            "buy_exchange": opp.buy_exchange,
+                            "buy_price": opp.buy_price,
+                            "buy_symbol": opp.buy_symbol,
+                            "buy_fee_pct": opp.buy_fee_pct,
+                            "sell_exchange": opp.sell_exchange,
+                            "sell_price": opp.sell_price,
+                            "sell_symbol": opp.sell_symbol,
+                            "sell_fee_pct": opp.sell_fee_pct,
+                            "spread_usdt": opp.spread_usdt,
+                            "spread_pct": opp.spread_pct,
+                            "gross_profit_usdt": opp.gross_profit_usdt,
+                            "total_fees_usdt": opp.total_fees_usdt,
+                            "timestamp_ms": opp.timestamp_ms,
+                        }
+                        for opp in opportunities
+                    ]
                     if payload:
-                        log.debug("Emitting %d opportunities via WebSocket", len(payload))
+                        log.info("Emitting %d opportunities via WebSocket", len(payload))
+                        # Log first opportunity for debugging
+                        if len(payload) > 0:
+                            log.debug("First opportunity sample: %s", payload[0])
                     else:
                         log.debug("Emitting empty opportunities list (no opportunities found yet)")
                     socketio.emit("opportunities", payload)
