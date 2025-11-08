@@ -29,7 +29,8 @@ class MexcAdapter(BaseAdapter):
         self._markets_cache_ttl: float = 600.0  # Кэш на 10 минут
         self._last_403_time: float = 0.0
         self._403_cooldown: float = 60.0  # 60 секунд после 403
-        self._request_delay: float = 1.0  # Задержка между запросами
+        self._request_delay: float = 3.0  # Задержка между запросами (увеличено для избежания блокировок)
+        self._successful_requests: int = 0  # Счетчик успешных запросов
 
     async def _ensure_cookies(self) -> None:
         """Visit main page to get cookies for Cloudflare protection."""
@@ -252,7 +253,12 @@ class MexcAdapter(BaseAdapter):
                 
                 # Add delay before request to avoid rate limiting
                 # Longer delay helps avoid Cloudflare blocks
-                await asyncio.sleep(self._request_delay)
+                # Увеличиваем задержку после каждого успешного запроса для снижения частоты
+                current_delay = self._request_delay
+                if self._successful_requests > 0:
+                    # После первых запросов увеличиваем задержку еще больше
+                    current_delay = self._request_delay * 1.5
+                await asyncio.sleep(current_delay)
                 
                 # Request all tickers - MEXC supports this endpoint
                 # Don't pass cookies - let HttpClientFactory handle headers
@@ -262,6 +268,12 @@ class MexcAdapter(BaseAdapter):
                     max_retries=1  # Don't retry on 403
                 )
                 consecutive_403_errors = 0  # Reset counter on success
+                self._successful_requests += 1
+                
+                # После каждых 10 успешных запросов увеличиваем базовую задержку
+                if self._successful_requests % 10 == 0:
+                    self._request_delay = min(self._request_delay * 1.2, 5.0)  # Максимум 5 секунд
+                    self._log.debug("MEXC: Increased request delay to %.1f seconds after %d successful requests", self._request_delay, self._successful_requests)
                 
                 if isinstance(data, list):
                     self._log.debug("Successfully received %d tickers from MEXC", len(data))
@@ -276,25 +288,32 @@ class MexcAdapter(BaseAdapter):
                     import time
                     self._last_403_time = time.time()
                     consecutive_403_errors += 1
+                    self._successful_requests = 0  # Reset success counter on 403
+                    
+                    # Увеличиваем базовую задержку при 403
+                    self._request_delay = min(self._request_delay * 1.5, 10.0)  # Максимум 10 секунд
+                    
                     # Refresh cookies on 403 - they might have expired
                     self._cookies_initialized = False
                     await self._ensure_cookies()
                     
                     if consecutive_403_errors >= max_403_errors:
                         self._log.warning(
-                            "MEXC returned %d consecutive 403 errors - IP may be blocked. "
-                            "Cooldown: %d seconds",
+                            "MEXC returned %d consecutive 403 errors - IP may be blocked. " 
+                            "Cooldown: %d seconds, request delay increased to %.1f seconds",
                             consecutive_403_errors,
-                            int(self._403_cooldown)
+                            int(self._403_cooldown),
+                            self._request_delay
                         )
                         # Don't wait here - let cooldown check handle it
                         consecutive_403_errors = 0  # Reset after reaching max
                     else:
                         wait_time = self._request_delay * (consecutive_403_errors + 1)
                         self._log.warning(
-                            "MEXC returned 403 Forbidden (consecutive: %d/%d). Refreshing cookies and waiting %.1f seconds.",
+                            "MEXC returned 403 Forbidden (consecutive: %d/%d). Request delay increased to %.1f seconds. Waiting %.1f seconds.",
                             consecutive_403_errors,
                             max_403_errors,
+                            self._request_delay,
                             wait_time
                         )
                         await asyncio.sleep(wait_time)  # Exponential backoff
