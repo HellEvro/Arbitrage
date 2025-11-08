@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from arbitrage_bot.core.exceptions import AggregationError
 from arbitrage_bot.exchanges import ExchangeAdapter
@@ -10,6 +12,17 @@ from arbitrage_bot.services.quote_store import QuoteStore
 from arbitrage_bot.services.schemas import MarketInfo
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class ExchangeStatus:
+    """Status information for an exchange."""
+    name: str
+    connected: bool
+    last_update_ms: int | None
+    quote_count: int
+    error_count: int
+    last_error: str | None
 
 
 class QuoteAggregator:
@@ -20,7 +33,21 @@ class QuoteAggregator:
         self._tasks: list[asyncio.Task[None]] = []
         self._reverse_map: dict[tuple[str, str], str] = {}
         self._symbols_by_exchange: dict[str, list[str]] = {}
+        # Exchange status tracking
+        self._exchange_status: dict[str, ExchangeStatus] = {}
+        self._status_lock = asyncio.Lock()
         self._rebuild_mappings()
+        
+        # Initialize status for all adapters
+        for adapter in adapters:
+            self._exchange_status[adapter.name] = ExchangeStatus(
+                name=adapter.name,
+                connected=False,
+                last_update_ms=None,
+                quote_count=0,
+                error_count=0,
+                last_error=None,
+            )
 
     async def start(self) -> None:
         if self._tasks:
@@ -94,6 +121,16 @@ class QuoteAggregator:
                         native_symbol=quote.symbol.upper(),
                     )
                     quote_count += 1
+                    
+                    # Update exchange status
+                    async with self._status_lock:
+                        status = self._exchange_status[adapter.name]
+                        status.connected = True
+                        status.last_update_ms = quote.timestamp_ms
+                        status.quote_count = quote_count
+                        status.error_count = 0
+                        status.last_error = None
+                    
                     if quote_count % 100 == 0:
                         log.debug("Received %d quotes from %s", quote_count, adapter.name)
             except asyncio.CancelledError:
@@ -101,6 +138,15 @@ class QuoteAggregator:
                 raise
             except Exception as exc:
                 consecutive_failures += 1
+                error_msg = str(exc)[:100]  # Limit error message length
+                
+                # Update exchange status
+                async with self._status_lock:
+                    status = self._exchange_status[adapter.name]
+                    status.connected = False
+                    status.error_count = consecutive_failures
+                    status.last_error = error_msg
+                
                 # Check if it's a 403 error (IP blocked)
                 is_403 = hasattr(exc, 'status') and exc.status == 403
                 if is_403:
@@ -150,4 +196,27 @@ class QuoteAggregator:
                 by_exchange.setdefault(exchange, []).append(symbol.upper())
         self._reverse_map = reverse
         self._symbols_by_exchange = by_exchange
+    
+    async def get_exchange_status(self) -> dict[str, ExchangeStatus]:
+        """Get current status of all exchanges."""
+        async with self._status_lock:
+            # Check for stale connections (no update in last 5 seconds)
+            now_ms = int(time.time() * 1000)
+            stale_threshold_ms = 5000
+            
+            result = {}
+            for name, status in self._exchange_status.items():
+                # If connected but no update in last 5 seconds, mark as disconnected
+                if status.connected and status.last_update_ms:
+                    if now_ms - status.last_update_ms > stale_threshold_ms:
+                        status.connected = False
+                result[name] = ExchangeStatus(
+                    name=status.name,
+                    connected=status.connected,
+                    last_update_ms=status.last_update_ms,
+                    quote_count=status.quote_count,
+                    error_count=status.error_count,
+                    last_error=status.last_error,
+                )
+            return result
 

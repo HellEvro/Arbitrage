@@ -7,7 +7,7 @@ const state = {
   frozen: false,
   blacklist: JSON.parse(localStorage.getItem("arbitrage_blacklist") || "[]"),
   whitelist: JSON.parse(localStorage.getItem("arbitrage_whitelist") || "[]"),
-  limit: parseInt(localStorage.getItem("arbitrage_limit") || "20"),
+  limit: localStorage.getItem("arbitrage_limit") || "20", // Всегда строка для совместимости с select
   sortBy: localStorage.getItem("arbitrage_sortBy") || "spread_usdt",
   enableBlacklist: localStorage.getItem("arbitrage_enableBlacklist") !== "false",
   enableWhitelist: localStorage.getItem("arbitrage_enableWhitelist") === "true",
@@ -123,21 +123,25 @@ function sortOpportunities(opportunities) {
 }
 
 function limitOpportunities(opportunities) {
-  if (state.limit === "all") {
+  const limit = String(state.limit); // Убеждаемся что это строка
+  
+  if (limit === "all") {
     return opportunities; // Вернуть все без ограничений
   }
   
-  if (state.limit === "custom") {
-    const customLimit = parseInt(document.getElementById("custom-limit")?.value || "20");
+  if (limit === "custom") {
+    const customLimit = parseInt(document.getElementById("custom-limit")?.value || "20", 10);
     return opportunities.slice(0, customLimit);
   }
   
   // Числовое значение (10, 20, 50, 100)
-  const limit = parseInt(state.limit) || 20;
-  return opportunities.slice(0, limit);
+  const numLimit = parseInt(limit, 10) || 20;
+  return opportunities.slice(0, numLimit);
 }
 
 function processOpportunities(opportunities) {
+  console.log("Processing opportunities:", opportunities.length, "total");
+  
   let processed = filterOpportunities(opportunities);
   console.log("After filtering:", processed.length);
   
@@ -145,7 +149,7 @@ function processOpportunities(opportunities) {
   console.log("After sorting:", processed.length);
   
   processed = limitOpportunities(processed);
-  console.log("After limiting:", processed.length, "limit:", state.limit);
+  console.log("After limiting:", processed.length, "limit:", state.limit, "type:", typeof state.limit);
   
   return processed;
 }
@@ -203,6 +207,12 @@ socket.on("opportunities", (data) => {
   renderOpportunities(state.opportunities);
 });
 
+// Обработка статуса бирж
+socket.on("exchange_status", (statuses) => {
+  console.log("Received exchange status:", statuses);
+  renderExchangeStatus(statuses);
+});
+
 // Управление табами
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -222,7 +232,7 @@ const limitSelect = document.getElementById("limit-select");
 const customLimitInput = document.getElementById("custom-limit");
 
 limitSelect.addEventListener("change", (e) => {
-  const value = e.target.value;
+  const value = String(e.target.value); // Убеждаемся что это строка
   state.limit = value;
   localStorage.setItem("arbitrage_limit", value);
   
@@ -234,7 +244,7 @@ limitSelect.addEventListener("change", (e) => {
     customLimitInput.style.display = "none";
   }
   
-  console.log("Limit changed to:", value, "Current opportunities:", state.opportunities.length);
+  console.log("Limit changed to:", value, "Current opportunities:", state.opportunities.length, "Total available:", state.opportunities.length);
   renderOpportunities(state.opportunities);
 });
 
@@ -430,6 +440,52 @@ document.getElementById("clear-all-btn").addEventListener("click", () => {
   }
 });
 
+// Рендеринг статуса бирж
+function renderExchangeStatus(statuses) {
+  const container = document.getElementById("exchange-status-list");
+  if (!container) return;
+  
+  if (!statuses || Object.keys(statuses).length === 0) {
+    container.innerHTML = "<p style='color: #8b949e;'>Загрузка статуса бирж...</p>";
+    return;
+  }
+  
+  const sortedExchanges = Object.values(statuses).sort((a, b) => {
+    // Сначала подключенные, потом отключенные
+    if (a.connected !== b.connected) {
+      return a.connected ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+  
+  container.innerHTML = sortedExchanges
+    .map((status) => {
+      const lastUpdate = status.last_update_ms
+        ? new Date(status.last_update_ms).toLocaleTimeString()
+        : "Никогда";
+      const age = status.last_update_ms
+        ? Math.floor((Date.now() - status.last_update_ms) / 1000)
+        : null;
+      const ageText = age !== null && age < 60 ? `${age}с назад` : age !== null ? `${Math.floor(age / 60)}м назад` : "";
+      
+      return `
+        <div class="exchange-status-item">
+          <div class="exchange-status-indicator ${status.connected ? "connected" : "disconnected"}"></div>
+          <div class="exchange-status-info">
+            <div class="exchange-status-name">${status.name.toUpperCase()}</div>
+            <div class="exchange-status-details">
+              ${status.connected ? "Подключено" : "Отключено"} • 
+              Котировок: ${status.quote_count || 0}
+              ${ageText ? ` • ${ageText}` : ""}
+            </div>
+            ${status.last_error ? `<div class="exchange-status-error" title="${status.last_error}">Ошибка: ${status.last_error.substring(0, 50)}...</div>` : ""}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 // Инициализация
 async function fetchInitial() {
   try {
@@ -442,6 +498,17 @@ async function fetchInitial() {
     console.log("Initial data received:", data?.length || 0, "opportunities");
     state.opportunities = data || [];
     renderOpportunities(state.opportunities);
+    
+    // Загрузить статус бирж
+    try {
+      const statusResponse = await fetch("/api/exchange-status");
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        renderExchangeStatus(statusData);
+      }
+    } catch (e) {
+      console.warn("Failed to load exchange status:", e);
+    }
   } catch (error) {
     console.error("Failed to load initial data", error);
     if (tableBody) {
@@ -451,13 +518,14 @@ async function fetchInitial() {
 }
 
 // Инициализация UI
-if (state.limit === "custom") {
+const initialLimit = String(state.limit); // Убеждаемся что это строка
+if (initialLimit === "custom") {
   customLimitInput.style.display = "inline-block";
   customLimitInput.value = localStorage.getItem("arbitrage_customLimit") || "20";
 } else {
   customLimitInput.style.display = "none";
 }
-limitSelect.value = state.limit;
+limitSelect.value = initialLimit;
 
 renderBlacklist();
 renderWhitelist();

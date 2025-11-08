@@ -67,19 +67,28 @@ class ArbitrageEngine:
         results: list[ArbitrageOpportunity] = []
         now_ms = int(time.time() * 1000)
         stale_threshold_ms = self._settings.thresholds.stale_ms
+        
+        snapshot_list = list(snapshots)
+        total_snapshots = len(snapshot_list)
+        filtered_by_exchanges = 0
+        filtered_by_stale = 0
+        filtered_by_price = 0
 
-        for snapshot in snapshots:
+        for snapshot in snapshot_list:
             # Minimum 2 exchanges required for arbitrage
             if len(snapshot.prices) < 2:
+                filtered_by_exchanges += 1
                 continue
 
             if now_ms - snapshot.timestamp_ms > stale_threshold_ms:
+                filtered_by_stale += 1
                 continue
 
             min_exchange, min_price = min(snapshot.prices.items(), key=lambda item: item[1])
             max_exchange, max_price = max(snapshot.prices.items(), key=lambda item: item[1])
 
             if min_price <= 0 or max_price <= 0:
+                filtered_by_price += 1
                 continue
 
             spread = max_price - min_price
@@ -160,6 +169,22 @@ class ArbitrageEngine:
             )
 
         results.sort(key=lambda item: item.spread_usdt, reverse=True)
+        
+        # Логируем статистику фильтрации
+        valid_snapshots = total_snapshots - filtered_by_exchanges - filtered_by_stale - filtered_by_price
+        log.debug(
+            "Snapshot filtering stats: total=%d, valid=%d, "
+            "filtered_by_exchanges=%d (<2 exchanges), filtered_by_stale=%d (>%dms old), filtered_by_price=%d (invalid), "
+            "opportunities=%d",
+            total_snapshots,
+            valid_snapshots,
+            filtered_by_exchanges,
+            filtered_by_stale,
+            stale_threshold_ms,
+            filtered_by_price,
+            len(results),
+        )
+        
         # Возвращаем ВСЕ результаты - фильтрация происходит на клиенте через UI
         # top_n больше не используется для ограничения, только для совместимости
         return results

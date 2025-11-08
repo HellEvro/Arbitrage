@@ -23,6 +23,7 @@ def create_app(
     discovery: MarketDiscoveryService | None = None,
     quote_store: QuoteStore | None = None,
     notifier: TelegramNotifier | None = None,
+    aggregator: "QuoteAggregator | None" = None,
 ) -> tuple[Flask, SocketIO]:
     app = Flask(__name__, static_folder="static", template_folder="templates")
     cors = settings.web.cors_origins if settings else ["*"]
@@ -85,6 +86,31 @@ def create_app(
             for opp in opportunities
         ]
         log.debug("API /ranking: returning %d opportunities", len(payload))
+        return jsonify(payload)
+
+    @app.route("/api/exchange-status")
+    def exchange_status() -> Any:
+        """Get status of all exchanges."""
+        if not aggregator:
+            return jsonify({})
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        statuses = loop.run_until_complete(aggregator.get_exchange_status())
+        payload = {
+            name: {
+                "name": status.name,
+                "connected": status.connected,
+                "last_update_ms": status.last_update_ms,
+                "quote_count": status.quote_count,
+                "error_count": status.error_count,
+                "last_error": status.last_error,
+            }
+            for name, status in statuses.items()
+        }
         return jsonify(payload)
 
     @app.route("/")
@@ -178,6 +204,26 @@ def create_app(
                     if payload:
                         log.debug("Emitting %d opportunities via WebSocket", len(payload))
                     socketio.emit("opportunities", payload)
+                    
+                    # Emit exchange status if aggregator is available
+                    if aggregator:
+                        try:
+                            statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                            status_payload = {
+                                name: {
+                                    "name": status.name,
+                                    "connected": status.connected,
+                                    "last_update_ms": status.last_update_ms,
+                                    "quote_count": status.quote_count,
+                                    "error_count": status.error_count,
+                                    "last_error": status.last_error,
+                                }
+                                for name, status in statuses.items()
+                            }
+                            socketio.emit("exchange_status", status_payload)
+                        except Exception as e:
+                            log.debug("Error emitting exchange status: %s", e)
+                    
                     import time
                     time.sleep(1)
             except Exception as e:

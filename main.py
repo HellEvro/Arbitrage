@@ -78,6 +78,7 @@ async def main() -> None:
         discovery=discovery,
         quote_store=quote_store,
         notifier=notifier,
+        aggregator=aggregator,
     )
 
     # Create and start application runner
