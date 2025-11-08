@@ -1,0 +1,18 @@
+# Дополнительные зависимости для разработки
+# Используйте: pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+# Тестирование
+pytest>=7.4
+pytest-asyncio>=0.23
+pytest-cov>=4.1
+
+# Линтинг и проверка типов
+mypy>=1.10
+ruff>=0.5
+
+# Типы для библиотек
+types-requests>=2.32
+types-python-dateutil>=2.8
+

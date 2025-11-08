@@ -1,0 +1,33 @@
+# Основные зависимости для Arbitrage Bot
+# Python 3.11+ required
+
+# HTTP клиент и WebSocket
+aiohttp>=3.9.4
+websockets>=12.0
+
+# Конфигурация и валидация
+pydantic>=2.5
+pydantic-settings>=2.2
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Логирование
+structlog>=24.1
+
+# Web интерфейс
+Flask>=3.0
+Flask-SocketIO>=5.3
+python-socketio[client]>=5.11
+
+# Telegram уведомления
+aiogram>=3.4
+
+# Кэширование (опционально)
+redis>=5.0
+
+# ASGI сервер (опционально)
+uvicorn>=0.30
+
+# JSON обработка
+orjson>=3.10
+
