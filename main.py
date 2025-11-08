@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from arbitrage_bot.bootstrap import build_app_components
+from arbitrage_bot.config import load_settings
 from arbitrage_bot.core.app_runner import AppRunner
+from arbitrage_bot.core.port_cleanup import cleanup_port, find_process_on_port, is_python_process
 from arbitrage_bot.web import create_app
+import time
+
+# Setup basic logging before anything else
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stderr,
+)
 
 log = logging.getLogger("arbitrage_bot.system")
 
@@ -13,7 +24,40 @@ log = logging.getLogger("arbitrage_bot.system")
 async def main() -> None:
     log.info("Starting arbitrage bot system")
     
-    # Build all application components
+    # Load settings first to get port configuration
+    settings = load_settings()
+    port = settings.web.port
+    
+    # Clean up any existing processes on the port - MUST succeed before continuing
+    log.info("Checking and cleaning up port %d (from config)", port)
+    max_cleanup_attempts = 3
+    cleanup_success = False
+    
+    for attempt in range(max_cleanup_attempts):
+        if cleanup_port(port, wait_timeout=20.0):
+            cleanup_success = True
+            log.info("Port %d successfully cleaned up on attempt %d", port, attempt + 1)
+            break
+        else:
+            log.warning("Port cleanup attempt %d failed, retrying...", attempt + 1)
+            if attempt < max_cleanup_attempts - 1:
+                time.sleep(2.0)  # Wait before retry
+    
+    if not cleanup_success:
+        log.error("FAILED to clean up port %d after %d attempts. Aborting startup!", port, max_cleanup_attempts)
+        raise RuntimeError(f"Port {port} is still in use and could not be freed. Please manually terminate processes.")
+    
+    # Final verification - port must be free
+    final_check = find_process_on_port(port)
+    if final_check:
+        final_python = [pid for pid in final_check if is_python_process(pid)]
+        if final_python:
+            log.error("Port %d verification failed - still has Python processes: %s", port, final_python)
+            raise RuntimeError(f"Port {port} verification failed - processes still running: {final_python}")
+    
+    log.info("Port %d verified free - proceeding with startup", port)
+    
+    # Build all application components (will reload settings, but that's OK)
     (
         settings,
         http_factory,

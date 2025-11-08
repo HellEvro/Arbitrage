@@ -21,10 +21,26 @@ class MarketDiscoveryService:
     async def refresh(self) -> list[MarketInfo]:
         log.info("Refreshing market discovery for %d exchanges", len(self._adapters))
         try:
-            markets_per_exchange = await asyncio.gather(*(adapter.fetch_markets() for adapter in self._adapters))
+            # Use return_exceptions=True to continue even if some exchanges fail
+            results = await asyncio.gather(
+                *(adapter.fetch_markets() for adapter in self._adapters),
+                return_exceptions=True
+            )
+            markets_per_exchange = []
+            for adapter, result in zip(self._adapters, results, strict=False):
+                if isinstance(result, Exception):
+                    log.error("Failed to fetch markets from %s: %s", adapter.name, result)
+                    markets_per_exchange.append([])  # Empty list for failed exchange
+                else:
+                    markets_per_exchange.append(result)
         except Exception as exc:  # pragma: no cover - unexpected network errors
-            log.exception("Failed to fetch markets from exchanges")
-            raise DiscoveryError(f"Failed to fetch markets: {exc}") from exc
+            # Don't raise if we have at least 2 exchanges working
+            successful_exchanges = sum(1 for markets in markets_per_exchange if len(markets) > 0)
+            if successful_exchanges >= 2:
+                log.warning("Some exchanges failed, but %d exchanges are still working: %s", successful_exchanges, exc)
+            else:
+                log.exception("Failed to fetch markets from exchanges")
+                raise DiscoveryError(f"Failed to fetch markets: {exc}") from exc
 
         symbol_map: dict[str, dict[str, str]] = {}
         for adapter, markets in zip(self._adapters, markets_per_exchange, strict=False):
@@ -35,9 +51,23 @@ class MarketDiscoveryService:
                 exchange_symbols = symbol_map.setdefault(canonical_symbol, {})
                 exchange_symbols[adapter.name] = market.symbol.upper()
 
+        # Count successful exchanges (non-empty market lists)
+        successful_exchanges = sum(1 for markets in markets_per_exchange if len(markets) > 0)
+        log.info("Successfully fetched markets from %d out of %d exchanges", successful_exchanges, len(self._adapters))
+        
+        # Minimum 2 exchanges required for arbitrage
+        MIN_EXCHANGES_REQUIRED = 2
+        if successful_exchanges < MIN_EXCHANGES_REQUIRED:
+            log.warning(
+                "Only %d exchanges available (minimum %d required). System will continue but may have limited opportunities.",
+                successful_exchanges,
+                MIN_EXCHANGES_REQUIRED
+            )
+        
         intersection: list[MarketInfo] = []
         for canonical, exchanges in symbol_map.items():
-            if len(exchanges) != len(self._adapters):
+            # Require symbol to be on at least 2 exchanges for arbitrage
+            if len(exchanges) < MIN_EXCHANGES_REQUIRED:
                 continue
             intersection.append(
                 MarketInfo(

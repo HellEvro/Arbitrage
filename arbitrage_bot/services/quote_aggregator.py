@@ -26,7 +26,23 @@ class QuoteAggregator:
         if self._tasks:
             log.warning("Quote aggregator already started")
             return
-        log.info("Starting quote aggregator for %d adapters", len(self._adapters))
+        
+        # Count adapters with symbols
+        active_adapters = sum(
+            1 for adapter in self._adapters
+            if self._symbols_by_exchange.get(adapter.name, [])
+        )
+        
+        MIN_EXCHANGES_REQUIRED = 2
+        if active_adapters < MIN_EXCHANGES_REQUIRED:
+            log.warning(
+                "Only %d adapters have symbols configured (minimum %d required). "
+                "System will continue but may have limited opportunities.",
+                active_adapters,
+                MIN_EXCHANGES_REQUIRED
+            )
+        
+        log.info("Starting quote aggregator for %d adapters (%d with symbols)", len(self._adapters), active_adapters)
         for adapter in self._adapters:
             symbols = self._symbols_by_exchange.get(adapter.name, [])
             if not symbols:
@@ -46,29 +62,56 @@ class QuoteAggregator:
         log.info("Quote aggregator stopped")
 
     async def _run_adapter(self, adapter: ExchangeAdapter, symbols: Sequence[str]) -> None:
+        """Run adapter with automatic retry on failures.
+        
+        Continues trying to reconnect even if adapter fails, ensuring system
+        works with minimum 2 exchanges. Uses exponential backoff for retries.
+        """
         quote_count = 0
-        try:
-            async for quote in adapter.quote_stream(symbols):
-                canonical = self._reverse_map.get((adapter.name, quote.symbol.upper()))
-                if not canonical:
-                    continue
-                mid_price = (quote.bid + quote.ask) / 2
-                await self._quote_store.upsert(
-                    canonical,
+        retry_delay = 5.0  # Start with 5 seconds
+        max_retry_delay = 300.0  # Max 5 minutes
+        consecutive_failures = 0
+        
+        while not adapter.closed:
+            try:
+                log.info("Starting quote stream for %s (attempt %d)", adapter.name, consecutive_failures + 1)
+                async for quote in adapter.quote_stream(symbols):
+                    # Reset retry delay on successful quote
+                    if consecutive_failures > 0:
+                        consecutive_failures = 0
+                        retry_delay = 5.0
+                        log.info("Quote stream recovered for %s", adapter.name)
+                    
+                    canonical = self._reverse_map.get((adapter.name, quote.symbol.upper()))
+                    if not canonical:
+                        continue
+                    mid_price = (quote.bid + quote.ask) / 2
+                    await self._quote_store.upsert(
+                        canonical,
+                        adapter.name,
+                        mid_price,
+                        timestamp_ms=quote.timestamp_ms,
+                        native_symbol=quote.symbol.upper(),
+                    )
+                    quote_count += 1
+                    if quote_count % 100 == 0:
+                        log.debug("Received %d quotes from %s", quote_count, adapter.name)
+            except asyncio.CancelledError:
+                log.info("Quote stream cancelled for %s (received %d quotes)", adapter.name, quote_count)
+                raise
+            except Exception as exc:
+                consecutive_failures += 1
+                log.warning(
+                    "Quote stream failed for %s (failure #%d, received %d quotes): %s. Retrying in %.1f seconds...",
                     adapter.name,
-                    mid_price,
-                    timestamp_ms=quote.timestamp_ms,
-                    native_symbol=quote.symbol.upper(),
+                    consecutive_failures,
+                    quote_count,
+                    exc,
+                    retry_delay
                 )
-                quote_count += 1
-                if quote_count % 100 == 0:
-                    log.debug("Received %d quotes from %s", quote_count, adapter.name)
-        except asyncio.CancelledError:
-            log.info("Quote stream cancelled for %s (received %d quotes)", adapter.name, quote_count)
-            raise
-        except Exception as exc:  # pragma: no cover - network errors
-            log.exception("Quote aggregator failed for %s after %d quotes: %s", adapter.name, quote_count, exc)
-            raise AggregationError(str(exc)) from exc
+                # Exponential backoff with max limit
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, max_retry_delay)
 
     def update_markets(self, markets: Sequence[MarketInfo]) -> None:
         self._markets = list(markets)

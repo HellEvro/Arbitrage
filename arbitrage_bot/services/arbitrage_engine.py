@@ -49,11 +49,17 @@ class ArbitrageEngine:
             return list(self._latest)
 
     async def _compute_opportunities(self, snapshots: Iterable[QuoteSnapshot]) -> list[ArbitrageOpportunity]:
+        """Compute arbitrage opportunities.
+        
+        Requires at least 2 exchanges per symbol for arbitrage.
+        System continues working even if some exchanges are unavailable.
+        """
         results: list[ArbitrageOpportunity] = []
         now_ms = int(time.time() * 1000)
         stale_threshold_ms = self._settings.thresholds.stale_ms
 
         for snapshot in snapshots:
+            # Minimum 2 exchanges required for arbitrage
             if len(snapshot.prices) < 2:
                 continue
 
