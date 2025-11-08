@@ -33,6 +33,8 @@ class QuoteAggregator:
         self._tasks: list[asyncio.Task[None]] = []
         self._reverse_map: dict[tuple[str, str], str] = {}
         self._symbols_by_exchange: dict[str, list[str]] = {}
+        # Mapping canonical symbol -> (base_asset, quote_asset)
+        self._symbol_to_assets: dict[str, tuple[str, str]] = {}
         # Exchange status tracking
         self._exchange_status: dict[str, ExchangeStatus] = {}
         self._status_lock = asyncio.Lock()
@@ -113,12 +115,16 @@ class QuoteAggregator:
                     if not canonical:
                         continue
                     mid_price = (quote.bid + quote.ask) / 2
+                    # Получаем base_asset и quote_asset для этого символа
+                    base_asset, quote_asset = self._symbol_to_assets.get(canonical, (None, None))
                     await self._quote_store.upsert(
                         canonical,
                         adapter.name,
                         mid_price,
                         timestamp_ms=quote.timestamp_ms,
                         native_symbol=quote.symbol.upper(),
+                        base_asset=base_asset,
+                        quote_asset=quote_asset,
                     )
                     quote_count += 1
                     
@@ -190,12 +196,25 @@ class QuoteAggregator:
     def _rebuild_mappings(self) -> None:
         reverse: dict[tuple[str, str], str] = {}
         by_exchange: dict[str, list[str]] = {}
+        symbol_to_assets: dict[str, tuple[str, str]] = {}
         for market in self._markets:
+            # Извлекаем base_asset и quote_asset из canonical symbol (например, "GAMEUSDT" -> "GAME", "USDT")
+            canonical = market.symbol.upper()
+            if canonical.endswith("USDT"):
+                base_asset = canonical[:-4]  # Убираем "USDT"
+                quote_asset = "USDT"
+            else:
+                # Fallback: пытаемся разделить по последним 4 символам
+                base_asset = canonical
+                quote_asset = "USDT"
+            symbol_to_assets[canonical] = (base_asset, quote_asset)
+            
             for exchange, symbol in market.exchange_symbols.items():
                 reverse[(exchange, symbol.upper())] = market.symbol
                 by_exchange.setdefault(exchange, []).append(symbol.upper())
         self._reverse_map = reverse
         self._symbols_by_exchange = by_exchange
+        self._symbol_to_assets = symbol_to_assets
     
     async def get_exchange_status(self) -> dict[str, ExchangeStatus]:
         """Get current status of all exchanges."""

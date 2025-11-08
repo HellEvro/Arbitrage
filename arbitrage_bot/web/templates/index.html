@@ -12,7 +12,9 @@
       
       <!-- Статус бирж -->
       <div id="exchange-status-panel" class="exchange-status-panel">
-        <h2>Статус подключения к биржам</h2>
+        <div class="exchange-status-header">
+          <h2>Статус подключения к биржам</h2>
+        </div>
         <div id="exchange-status-list" class="exchange-status-list">
           <!-- Статусы будут добавлены через JavaScript -->
         </div>
@@ -45,13 +47,22 @@
         </div>
         
         <div class="control-group">
+          <label for="search-input">Поиск:</label>
+          <input type="text" id="search-input" placeholder="Введите символ монеты..." style="width: 200px;" />
+        </div>
+        
+        <div class="control-group">
           <button id="freeze-btn" class="btn btn-secondary">⏸ Зафиксировать</button>
           <span id="freeze-status" class="status-indicator"></span>
         </div>
+        
       </div>
 
       <!-- Табы -->
       <div class="tabs">
+        <button id="collapse-all-btn" class="collapse-all-tab-btn" onclick="toggleAllGroups()" title="Свернуть/развернуть все монеты">
+          <span class="collapse-all-icon">▼</span>
+        </button>
         <button class="tab-btn active" data-tab="main">Основная таблица</button>
         <button class="tab-btn" data-tab="blacklist">Черный список</button>
         <button class="tab-btn" data-tab="whitelist">Белый список</button>

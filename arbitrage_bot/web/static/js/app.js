@@ -13,6 +13,8 @@ const state = {
   enableWhitelist: localStorage.getItem("arbitrage_enableWhitelist") === "true",
   autoSortWhitelist: localStorage.getItem("arbitrage_autoSortWhitelist") !== "false",
   expandedGroups: JSON.parse(localStorage.getItem("arbitrage_expandedGroups") || "[]"), // Раскрытые группы
+  searchQuery: "", // Поисковый запрос
+  allGroupsExpandedMode: localStorage.getItem("arbitrage_allGroupsExpandedMode") === "true", // Режим: все раскрыты (true) или все закрыты (false)
 };
 
 console.log("Socket.IO initialized:", socket.connected);
@@ -30,16 +32,52 @@ socket.on("connect_error", (error) => {
 });
 
 const tradeUrlResolvers = {
-  bybit: (symbol) => `https://www.bybit.com/trade/spot/${symbol}`,
-  mexc: (symbol) => `https://www.mexc.com/exchange/${symbol}`,
-  bitget: (symbol) => `https://www.bitget.com/spot/${symbol}`,
-  okx: (symbol) => `https://www.okx.com/trade-spot/${symbol}`,
-  kucoin: (symbol) => `https://www.kucoin.com/trade/${symbol}`,
+  bybit: (symbol) => `https://www.bybit.com/ru-RU/trade/spot/${symbol}`,
+  mexc: (symbol) => `https://www.mexc.com/ru-RU/exchange/${symbol}`,
+  bitget: (symbol) => `https://www.bitget.com/ru-RU/spot/${symbol}`,
+  okx: (symbol) => `https://www.okx.com/ru-RU/trade-spot/${symbol}`,
+  kucoin: (symbol) => `https://www.kucoin.com/ru-RU/trade/${symbol}`,
 };
 
+function formatSymbol(symbol) {
+  // Убираем USDT из конца символа для отображения
+  if (symbol && symbol.toUpperCase().endsWith("USDT")) {
+    return symbol.slice(0, -4);
+  }
+  return symbol;
+}
+
 function createExchangeLink(exchange, symbol) {
+  // Разделяем символ на BASE/USDT для правильных ссылок
+  let urlSymbol = symbol;
+  if (symbol && symbol.toUpperCase().endsWith("USDT")) {
+    const base = symbol.slice(0, -4);
+    const quote = "USDT";
+    
+    // Формируем правильные ссылки для каждой биржи
+    switch (exchange.toLowerCase()) {
+      case "bybit":
+        urlSymbol = `${base}/${quote}`;
+        break;
+      case "mexc":
+        urlSymbol = `${base}_${quote}`;
+        break;
+      case "bitget":
+        urlSymbol = symbol; // Bitget использует формат без разделителя
+        break;
+      case "okx":
+        urlSymbol = `${base}-${quote}`;
+        break;
+      case "kucoin":
+        urlSymbol = `${base}-${quote}`;
+        break;
+      default:
+        urlSymbol = symbol;
+    }
+  }
+  
   const resolver = tradeUrlResolvers[exchange.toLowerCase()];
-  const url = resolver ? resolver(symbol) : `https://${exchange}.com/trade/${symbol}`;
+  const url = resolver ? resolver(urlSymbol) : `https://${exchange}.com/trade/${urlSymbol}`;
   return `<a href="${url}" target="_blank" rel="noopener noreferrer">${exchange}</a>`;
 }
 
@@ -219,21 +257,46 @@ function renderOpportunities(opportunities) {
     return maxB - maxA;
   });
   
+  // Применяем режим "все раскрыты/закрыты" к новым монетам
+  if (state.allGroupsExpandedMode !== undefined) {
+    // Если режим установлен, применяем его к новым монетам
+    for (const symbol of symbols) {
+      if (state.allGroupsExpandedMode) {
+        // Режим "все раскрыты" - добавляем новые монеты в expandedGroups
+        if (!state.expandedGroups.includes(symbol)) {
+          state.expandedGroups.push(symbol);
+        }
+      } else {
+        // Режим "все закрыты" - удаляем новые монеты из expandedGroups
+        const index = state.expandedGroups.indexOf(symbol);
+        if (index !== -1) {
+          state.expandedGroups.splice(index, 1);
+        }
+      }
+    }
+    // Сохраняем обновленный список
+    localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
+  }
+  
   let html = "";
   for (const symbol of symbols) {
     const opps = processed[symbol];
     const maxProfit = Math.max(...opps.map(o => o.spread_usdt || 0));
     const groupId = `group-${symbol}`;
-    const isExpanded = state.expandedGroups?.includes(symbol) ?? true; // По умолчанию раскрыто
+    // Проверяем состояние: если режим установлен, используем его, иначе проверяем expandedGroups
+    const isExpanded = state.allGroupsExpandedMode !== undefined 
+      ? state.allGroupsExpandedMode 
+      : (state.expandedGroups?.includes(symbol) ?? true); // По умолчанию раскрыто
     
     // Заголовок группы
+    const displaySymbol = formatSymbol(symbol); // Убираем USDT для отображения
     html += `
       <tr class="symbol-group-header" data-symbol="${symbol}" onclick="toggleGroup('${symbol}')">
         <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <span class="group-toggle-icon" style="font-size: 0.8rem;">${isExpanded ? '▼' : '▶'}</span>
-            <strong style="font-size: 1rem;">${symbol}</strong>
-            <span style="color: #8b949e; font-size: 0.85rem;">
+            <span class="group-toggle-icon" style="font-size: 0.9rem;">${isExpanded ? '▼' : '▶'}</span>
+            <strong style="font-size: 1.1rem;">${displaySymbol}</strong>
+            <span style="color: #8b949e; font-size: 0.9rem;">
               (${opps.length} ${opps.length === 1 ? 'возможность' : opps.length < 5 ? 'возможности' : 'возможностей'}, 
               макс. прибыль: <span class="profit">${maxProfit.toFixed(2)} USDT</span>)
             </span>
@@ -242,30 +305,28 @@ function renderOpportunities(opportunities) {
       </tr>
     `;
     
-    // Строки с возможностями (скрыты/показаны в зависимости от состояния)
-    if (isExpanded) {
-      for (const opp of opps) {
-        const grossProfit = opp.gross_profit_usdt || 0;
-        const totalFees = opp.total_fees_usdt || 0;
-        const netProfit = opp.spread_usdt || 0;
-        
-        html += `
-          <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22;">
-            <td style="padding-left: 2rem;">→</td>
-            <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
-            <td>${formatPrice(opp.buy_price)}</td>
-            <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-            <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
-            <td>${formatPrice(opp.sell_price)}</td>
-            <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-            <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
-            <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
-            <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
-            <td>${opp.spread_pct.toFixed(3)}%</td>
-            <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
-          </tr>
-        `;
-      }
+    // Строки с возможностями (всегда рендерим, но скрываем через display если свернуто)
+    for (const opp of opps) {
+      const grossProfit = opp.gross_profit_usdt || 0;
+      const totalFees = opp.total_fees_usdt || 0;
+      const netProfit = opp.spread_usdt || 0;
+      
+      html += `
+        <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22; display: ${isExpanded ? '' : 'none'};">
+          <td style="padding-left: 2rem;">→</td>
+          <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
+          <td>${formatPrice(opp.buy_price)}</td>
+          <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+          <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
+          <td>${formatPrice(opp.sell_price)}</td>
+          <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+          <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
+          <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
+          <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
+          <td>${opp.spread_pct.toFixed(3)}%</td>
+          <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
+        </tr>
+      `;
     }
   }
   
@@ -293,23 +354,90 @@ function toggleGroup(symbol) {
   renderOpportunities(state.opportunities);
 }
 
+function toggleAllGroups() {
+  const processed = processOpportunities(state.opportunities);
+  const allSymbols = Object.keys(processed);
+  
+  if (!state.expandedGroups) {
+    state.expandedGroups = [];
+  }
+  
+  // Проверяем, все ли группы раскрыты (по умолчанию считаем раскрытыми, если их нет в списке)
+  const allExpanded = allSymbols.length > 0 && allSymbols.every(symbol => state.expandedGroups.includes(symbol));
+  
+  if (allExpanded) {
+    // Сворачиваем все - сохраняем режим "все закрыты"
+    state.expandedGroups = [];
+    state.allGroupsExpandedMode = false; // Режим: все закрыты
+    updateCollapseButton(false);
+  } else {
+    // Разворачиваем все - сохраняем режим "все раскрыты"
+    state.expandedGroups = [...allSymbols];
+    state.allGroupsExpandedMode = true; // Режим: все раскрыты
+    updateCollapseButton(true);
+  }
+  
+  localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
+  localStorage.setItem("arbitrage_allGroupsExpandedMode", state.allGroupsExpandedMode.toString());
+  // Используем updateGroupIcons вместо полного рендера для быстрого обновления
+  updateGroupIcons();
+}
+
+function updateCollapseButton(allExpanded) {
+  const btn = document.getElementById("collapse-all-btn");
+  if (btn) {
+    const icon = btn.querySelector(".collapse-all-icon");
+    if (icon) {
+      if (allExpanded) {
+        icon.textContent = "▲";
+        btn.classList.remove("btn-secondary");
+        btn.classList.add("btn-success");
+        btn.title = "Развернуть все монеты";
+      } else {
+        icon.textContent = "▼";
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-secondary");
+        btn.title = "Свернуть все монеты";
+      }
+    }
+  }
+}
+
 function updateGroupIcons() {
+  console.log("updateGroupIcons called, expandedGroups:", state.expandedGroups);
   document.querySelectorAll(".symbol-group-header").forEach(header => {
     const symbol = header.dataset.symbol;
+    if (!symbol) {
+      console.warn("Header without symbol:", header);
+      return;
+    }
+    // По умолчанию группы раскрыты, если не указано иное
     const isExpanded = state.expandedGroups?.includes(symbol) ?? true;
+    console.log(`Group ${symbol}: isExpanded=${isExpanded}`);
+    
     const icon = header.querySelector(".group-toggle-icon");
     if (icon) {
       icon.textContent = isExpanded ? '▼' : '▶';
     }
+    
     // Показываем/скрываем строки группы
-    document.querySelectorAll(`tr.symbol-group-row[data-group="${symbol}"]`).forEach(row => {
+    const rows = document.querySelectorAll(`tr.symbol-group-row[data-group="${symbol}"]`);
+    console.log(`Found ${rows.length} rows for group ${symbol}`);
+    rows.forEach(row => {
       row.style.display = isExpanded ? "" : "none";
     });
   });
+  
+  // Обновляем кнопку "Свернуть все"
+  const processed = processOpportunities(state.opportunities);
+  const allSymbols = Object.keys(processed);
+  const allExpanded = allSymbols.length > 0 && allSymbols.every(s => state.expandedGroups?.includes(s) ?? true);
+  updateCollapseButton(allExpanded);
 }
 
-// Делаем функцию доступной глобально
+// Делаем функции доступными глобально
 window.toggleGroup = toggleGroup;
+window.toggleAllGroups = toggleAllGroups;
 
 socket.on("opportunities", (data) => {
   if (state.frozen) {
@@ -573,26 +701,16 @@ function renderExchangeStatus(statuses) {
   
   container.innerHTML = sortedExchanges
     .map((status) => {
-      const lastUpdate = status.last_update_ms
-        ? new Date(status.last_update_ms).toLocaleTimeString()
-        : "Никогда";
       const age = status.last_update_ms
         ? Math.floor((Date.now() - status.last_update_ms) / 1000)
         : null;
-      const ageText = age !== null && age < 60 ? `${age}с назад` : age !== null ? `${Math.floor(age / 60)}м назад` : "";
+      const ageText = age !== null && age < 60 ? `${age}с` : age !== null ? `${Math.floor(age / 60)}м` : "";
       
       return `
-        <div class="exchange-status-item">
+        <div class="exchange-status-item" title="${status.connected ? 'Подключено' : 'Отключено'} • Котировок: ${status.quote_count || 0}${status.last_error ? ` • Ошибка: ${status.last_error}` : ''}">
           <div class="exchange-status-indicator ${status.connected ? "connected" : "disconnected"}"></div>
-          <div class="exchange-status-info">
-            <div class="exchange-status-name">${status.name.toUpperCase()}</div>
-            <div class="exchange-status-details">
-              ${status.connected ? "Подключено" : "Отключено"} • 
-              Котировок: ${status.quote_count || 0}
-              ${ageText ? ` • ${ageText}` : ""}
-            </div>
-            ${status.last_error ? `<div class="exchange-status-error" title="${status.last_error}">Ошибка: ${status.last_error.substring(0, 50)}...</div>` : ""}
-          </div>
+          <span class="exchange-status-name">${status.name.toUpperCase()}</span>
+          <span class="exchange-status-details">${status.quote_count || 0}${ageText ? ` • ${ageText}` : ""}</span>
         </div>
       `;
     })

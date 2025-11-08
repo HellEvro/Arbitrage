@@ -17,6 +17,8 @@ class QuoteSnapshot:
     prices: dict[str, float]
     timestamp_ms: int
     exchange_symbols: dict[str, str]
+    base_asset: str | None = None  # Базовая валюта (например, "GAME")
+    quote_asset: str | None = None  # Котируемая валюта (например, "USDT")
 
 
 @dataclass(slots=True)
@@ -35,4 +37,6 @@ class ArbitrageOpportunity:
     gross_profit_usdt: float  # Gross profit before fees
     total_fees_usdt: float  # Total fees (buy + sell)
     timestamp_ms: int
+    base_asset: str | None = None  # Базовая валюта (например, "GAME")
+    quote_asset: str | None = None  # Котируемая валюта (например, "USDT")
 
