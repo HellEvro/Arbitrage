@@ -97,6 +97,18 @@ function formatPrice(price) {
 function filterOpportunities(opportunities) {
   let filtered = [...opportunities];
 
+  // Применить поиск по символу
+  const searchQuery = state.searchQuery?.trim().toUpperCase() || "";
+  if (searchQuery) {
+    filtered = filtered.filter((opp) => {
+      const symbol = opp.symbol.toUpperCase();
+      const displaySymbol = formatSymbol(symbol).toUpperCase();
+      // Ищем в полном символе (например, BTCUSDT) и в отображаемом символе (BTC)
+      return symbol.includes(searchQuery) || displaySymbol.includes(searchQuery);
+    });
+    console.log("After search filter:", filtered.length, "query:", searchQuery);
+  }
+
   // Применить черный список
   if (state.enableBlacklist && state.blacklist.length > 0) {
     filtered = filtered.filter((opp) => !state.blacklist.includes(opp.symbol.toUpperCase()));
@@ -341,17 +353,31 @@ function renderOpportunities(opportunities) {
 }
 
 function toggleGroup(symbol) {
+  console.log("toggleGroup called for symbol:", symbol);
   if (!state.expandedGroups) {
     state.expandedGroups = [];
   }
+  
+  // Если режим "все раскрыты" или "все закрыты" активен, сбрасываем его при ручном переключении
+  if (state.allGroupsExpandedMode !== undefined) {
+    // Сбрасываем режим - теперь управление индивидуальное
+    state.allGroupsExpandedMode = undefined;
+    localStorage.removeItem("arbitrage_allGroupsExpandedMode");
+  }
+  
   const index = state.expandedGroups.indexOf(symbol);
   if (index === -1) {
+    // Добавляем символ - разворачиваем группу
     state.expandedGroups.push(symbol);
+    console.log("Expanding group:", symbol, "expandedGroups:", state.expandedGroups);
   } else {
+    // Удаляем символ - сворачиваем группу
     state.expandedGroups.splice(index, 1);
+    console.log("Collapsing group:", symbol, "expandedGroups:", state.expandedGroups);
   }
   localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
-  renderOpportunities(state.opportunities);
+  // Обновляем отображение через updateGroupIcons вместо полного рендера
+  updateGroupIcons();
 }
 
 function toggleAllGroups() {
@@ -404,15 +430,17 @@ function updateCollapseButton(allExpanded) {
 }
 
 function updateGroupIcons() {
-  console.log("updateGroupIcons called, expandedGroups:", state.expandedGroups);
+  console.log("updateGroupIcons called, expandedGroups:", state.expandedGroups, "allGroupsExpandedMode:", state.allGroupsExpandedMode);
   document.querySelectorAll(".symbol-group-header").forEach(header => {
     const symbol = header.dataset.symbol;
     if (!symbol) {
       console.warn("Header without symbol:", header);
       return;
     }
-    // По умолчанию группы раскрыты, если не указано иное
-    const isExpanded = state.expandedGroups?.includes(symbol) ?? true;
+    // Проверяем состояние: если режим установлен, используем его, иначе проверяем expandedGroups
+    const isExpanded = state.allGroupsExpandedMode !== undefined 
+      ? state.allGroupsExpandedMode 
+      : (state.expandedGroups?.includes(symbol) ?? true);
     console.log(`Group ${symbol}: isExpanded=${isExpanded}`);
     
     const icon = header.querySelector(".group-toggle-icon");
@@ -431,7 +459,10 @@ function updateGroupIcons() {
   // Обновляем кнопку "Свернуть все"
   const processed = processOpportunities(state.opportunities);
   const allSymbols = Object.keys(processed);
-  const allExpanded = allSymbols.length > 0 && allSymbols.every(s => state.expandedGroups?.includes(s) ?? true);
+  // Если режим установлен, используем его, иначе проверяем expandedGroups
+  const allExpanded = state.allGroupsExpandedMode !== undefined
+    ? state.allGroupsExpandedMode
+    : (allSymbols.length > 0 && allSymbols.every(s => state.expandedGroups?.includes(s) ?? true));
   updateCollapseButton(allExpanded);
 }
 
@@ -467,6 +498,28 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     document.getElementById(`tab-${tabName}`).classList.add("active");
   });
 });
+
+// Управление поиском
+const searchInput = document.getElementById("search-input");
+if (searchInput) {
+  // Восстанавливаем значение из состояния
+  searchInput.value = state.searchQuery || "";
+  
+  searchInput.addEventListener("input", (e) => {
+    state.searchQuery = e.target.value;
+    console.log("Search query changed to:", state.searchQuery);
+    renderOpportunities(state.opportunities);
+  });
+  
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      searchInput.value = "";
+      state.searchQuery = "";
+      console.log("Search cleared");
+      renderOpportunities(state.opportunities);
+    }
+  });
+}
 
 // Управление лимитом
 const limitSelect = document.getElementById("limit-select");
