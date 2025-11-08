@@ -30,11 +30,17 @@ class HttpClientFactory:
                 headers = {
                     "User-Agent": self._user_agent,
                     "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept-Encoding": "gzip, deflate",  # Removed 'br' (brotli) - requires brotli library
+                    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+                    "Accept-Encoding": "gzip, deflate",
                     "Connection": "keep-alive",
                     "Cache-Control": "no-cache",
                     "Pragma": "no-cache",
+                    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"',
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-origin",
                 }
                 # Create connector with SSL verification but allow more flexible SSL
                 connector = aiohttp.TCPConnector(ssl=True, limit=100)
@@ -52,7 +58,7 @@ class HttpClientFactory:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def get_json(self, url: str, params: dict[str, Any] | None = None, max_retries: int = 3, extra_headers: dict[str, str] | None = None) -> Any:
+    async def get_json(self, url: str, params: dict[str, Any] | None = None, max_retries: int = 3, extra_headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> Any:
         """
         Make GET request to public API endpoint (no authentication required).
         Handles rate limiting (429) with exponential backoff retry.
@@ -62,15 +68,18 @@ class HttpClientFactory:
             params: Query parameters
             max_retries: Maximum retry attempts
             extra_headers: Additional headers to include (e.g., Referer, Origin for Cloudflare)
+            cookies: Cookies to include in request (for Cloudflare protection)
         """
         log.debug("GET %s with params: %s", url, params)
         retry_count = 0
         async with self.session() as session:
             # Merge extra headers if provided
             request_headers = dict(extra_headers) if extra_headers else {}
+            # Add cookies if provided
+            request_cookies = dict(cookies) if cookies else {}
             while retry_count < max_retries:
                 try:
-                    async with session.get(url, params=params, headers=request_headers) as response:
+                    async with session.get(url, params=params, headers=request_headers, cookies=request_cookies) as response:
                         if response.status == 429:
                             # Rate limit exceeded - wait and retry
                             try:
