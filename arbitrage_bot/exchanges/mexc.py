@@ -24,6 +24,11 @@ class MexcAdapter(BaseAdapter):
         super().__init__(http_factory, poll_interval=poll_interval)
         self._cookies: dict[str, str] = {}
         self._cookies_initialized = False
+        self._markets_cache: list[ExchangeMarket] | None = None
+        self._markets_cache_time: float = 0.0
+        self._markets_cache_ttl: float = 600.0  # Кэш на 10 минут
+        self._last_403_time: float = 0.0
+        self._403_cooldown: float = 300.0  # Не пытаться 5 минут после 403
 
     async def _ensure_cookies(self) -> None:
         """Visit main page to get cookies for Cloudflare protection."""
@@ -54,12 +59,27 @@ class MexcAdapter(BaseAdapter):
         await asyncio.sleep(1.0)  # Wait after getting cookies
 
     async def fetch_markets(self) -> Sequence[ExchangeMarket]:
+        import time
+        current_time = time.time()
+        
+        # Проверяем кэш
+        if self._markets_cache is not None and (current_time - self._markets_cache_time) < self._markets_cache_ttl:
+            self._log.debug("Using cached MEXC markets (%d markets)", len(self._markets_cache))
+            return self._markets_cache
+        
+        # Проверяем cooldown после 403
+        if (current_time - self._last_403_time) < self._403_cooldown:
+            self._log.debug("MEXC still in 403 cooldown, using cached markets or returning empty")
+            if self._markets_cache is not None:
+                return self._markets_cache
+            return []
+        
         self._log.info("Fetching markets from MEXC")
         # MEXC uses Cloudflare protection - get cookies first
         await self._ensure_cookies()
         
         import asyncio
-        await asyncio.sleep(0.5)  # Small delay to avoid rapid requests
+        await asyncio.sleep(1.0)  # Увеличил задержку для избежания блокировок
         
         mexc_headers = {
             "Referer": "https://www.mexc.com/exchange/BTC_USDT",
@@ -101,8 +121,12 @@ class MexcAdapter(BaseAdapter):
             # All endpoints failed, try ticker24hr fallback
             # But skip if last error was 403 (IP blocked)
             if last_error and hasattr(last_error, 'status') and last_error.status == 403:
-                self._log.warning("MEXC API returned 403 Forbidden - IP may be blocked. Skipping ticker24hr fallback.")
-                # Return empty list - system will continue with other exchanges
+                import time
+                self._last_403_time = time.time()
+                self._log.warning("MEXC API returned 403 Forbidden - IP may be blocked. Skipping ticker24hr fallback. Cooldown: %d seconds", self._403_cooldown)
+                # Return cached markets if available, otherwise empty list
+                if self._markets_cache is not None:
+                    return self._markets_cache
                 return []
             
             if last_error:
@@ -131,7 +155,11 @@ class MexcAdapter(BaseAdapter):
                             quote_asset="USDT",
                         )
                     )
-                self._log.info("Fetched %d USDT markets from MEXC (via ticker24hr fallback)", len(markets))
+                # Сохраняем в кэш
+                import time
+                self._markets_cache = markets
+                self._markets_cache_time = time.time()
+                self._log.info("Fetched %d USDT markets from MEXC (via ticker24hr fallback, cached for %d seconds)", len(markets), int(self._markets_cache_ttl))
                 return markets
             except Exception as e2:
                 self._log.error("Both exchangeInfo and ticker24hr failed for MEXC: %s", e2)
@@ -156,7 +184,11 @@ class MexcAdapter(BaseAdapter):
                     quote_asset="USDT",
                 )
             )
-        self._log.info("Fetched %d USDT markets from MEXC", len(markets))
+        # Сохраняем в кэш
+        import time
+        self._markets_cache = markets
+        self._markets_cache_time = time.time()
+        self._log.info("Fetched %d USDT markets from MEXC (cached for %d seconds)", len(markets), int(self._markets_cache_ttl))
         return markets
 
     async def quote_stream(self, symbols: Sequence[str]) -> AsyncIterator[ExchangeQuote]:

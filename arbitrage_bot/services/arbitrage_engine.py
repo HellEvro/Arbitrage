@@ -19,7 +19,7 @@ class ArbitrageEngine:
         quote_store: QuoteStore, 
         settings: Settings, 
         fee_fetcher: FeeFetcher | None = None,
-        top_n: int = 20
+        top_n: int = 1000  # Большое значение по умолчанию - фильтрация на клиенте
     ) -> None:
         self._quote_store = quote_store
         self._settings = settings
@@ -39,7 +39,17 @@ class ArbitrageEngine:
             self._latest = opportunities
 
         if opportunities:
-            log.info("Found %d arbitrage opportunities", len(opportunities))
+            log.info("Found %d arbitrage opportunities (from %d snapshots)", len(opportunities), len(snapshot_list))
+            if len(opportunities) > 0:
+                top_opp = opportunities[0]
+                log.debug(
+                    "Top opportunity: %s - Gross: %.2f USDT, Fees: %.2f USDT, Net: %.2f USDT (%.3f%%)",
+                    top_opp.symbol,
+                    top_opp.gross_profit_usdt,
+                    top_opp.total_fees_usdt,
+                    top_opp.spread_usdt,
+                    top_opp.spread_pct,
+                )
         else:
             log.debug("No arbitrage opportunities found (snapshots: %d)", len(snapshot_list))
         return opportunities
@@ -106,9 +116,25 @@ class ArbitrageEngine:
             gross_profit = (max_price - min_price) * quantity
             net_profit = gross_profit - total_fees - slippage
 
+            # Логируем отфильтрованные возможности для диагностики
             if net_profit < self._settings.thresholds.min_profit_usdt:
+                log.debug(
+                    "Filtered %s: net_profit %.2f < min_profit %.2f (gross: %.2f, fees: %.2f, slippage: %.2f)",
+                    snapshot.symbol,
+                    net_profit,
+                    self._settings.thresholds.min_profit_usdt,
+                    gross_profit,
+                    total_fees,
+                    slippage,
+                )
                 continue
             if spread_pct < self._settings.thresholds.min_spread_pct:
+                log.debug(
+                    "Filtered %s: spread_pct %.3f < min_spread %.3f",
+                    snapshot.symbol,
+                    spread_pct,
+                    self._settings.thresholds.min_spread_pct,
+                )
                 continue
 
             buy_symbol = snapshot.exchange_symbols.get(min_exchange, snapshot.symbol)
@@ -127,10 +153,14 @@ class ArbitrageEngine:
                     sell_fee_pct=sell_fee_pct,
                     spread_usdt=net_profit,
                     spread_pct=spread_pct,
+                    gross_profit_usdt=gross_profit,
+                    total_fees_usdt=total_fees,
                     timestamp_ms=snapshot.timestamp_ms,
                 )
             )
 
         results.sort(key=lambda item: item.spread_usdt, reverse=True)
-        return results[: self._top_n]
+        # Возвращаем ВСЕ результаты - фильтрация происходит на клиенте через UI
+        # top_n больше не используется для ограничения, только для совместимости
+        return results
 

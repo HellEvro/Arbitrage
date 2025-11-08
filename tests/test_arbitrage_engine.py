@@ -42,4 +42,9 @@ async def test_arbitrage_engine_detects_opportunity() -> None:
     assert opportunity.sell_symbol == "BTCUSDT"
     assert opportunity.buy_fee_pct >= 0
     assert opportunity.sell_fee_pct >= 0
+    assert opportunity.gross_profit_usdt > 0
+    assert opportunity.total_fees_usdt >= 0
+    # Чистая прибыль = валовая прибыль - комиссии - проскальзывание
+    # Проверяем что чистая прибыль меньше или равна валовой минус комиссии
+    assert opportunity.spread_usdt <= opportunity.gross_profit_usdt - opportunity.total_fees_usdt
 

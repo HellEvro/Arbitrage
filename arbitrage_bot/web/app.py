@@ -78,6 +78,8 @@ def create_app(
                 "sell_fee_pct": opp.sell_fee_pct,
                 "spread_usdt": opp.spread_usdt,
                 "spread_pct": opp.spread_pct,
+                "gross_profit_usdt": opp.gross_profit_usdt,
+                "total_fees_usdt": opp.total_fees_usdt,
                 "timestamp_ms": opp.timestamp_ms,
             }
             for opp in opportunities

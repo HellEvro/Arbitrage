@@ -30,7 +30,9 @@ class ArbitrageOpportunity:
     sell_price: float
     sell_symbol: str
     sell_fee_pct: float  # Fee percentage for sell exchange
-    spread_usdt: float
+    spread_usdt: float  # Net profit after fees and slippage
     spread_pct: float
+    gross_profit_usdt: float  # Gross profit before fees
+    total_fees_usdt: float  # Total fees (buy + sell)
     timestamp_ms: int
 

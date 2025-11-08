@@ -153,10 +153,10 @@ function processOpportunities(opportunities) {
 function renderOpportunities(opportunities) {
   console.log("Rendering opportunities:", opportunities?.length || 0);
   
-  if (!Array.isArray(opportunities) || opportunities.length === 0) {
+    if (!Array.isArray(opportunities) || opportunities.length === 0) {
     console.warn("No opportunities to render:", opportunities);
     if (tableBody) {
-      tableBody.innerHTML = "<tr><td colspan='10' style='text-align: center;'>Нет данных</td></tr>";
+      tableBody.innerHTML = "<tr><td colspan='12' style='text-align: center;'>Нет данных</td></tr>";
     }
     return;
   }
@@ -170,6 +170,10 @@ function renderOpportunities(opportunities) {
   
   tableBody.innerHTML = processed
     .map((opp) => {
+      const grossProfit = opp.gross_profit_usdt || 0;
+      const totalFees = opp.total_fees_usdt || 0;
+      const netProfit = opp.spread_usdt || 0;
+      
       return `
         <tr>
           <td><strong>${opp.symbol}</strong></td>
@@ -179,7 +183,9 @@ function renderOpportunities(opportunities) {
           <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
           <td>${formatPrice(opp.sell_price)}</td>
           <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-          <td><strong class="profit">${opp.spread_usdt.toFixed(2)}</strong></td>
+          <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
+          <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
+          <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
           <td>${opp.spread_pct.toFixed(3)}%</td>
           <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
         </tr>
@@ -439,7 +445,7 @@ async function fetchInitial() {
   } catch (error) {
     console.error("Failed to load initial data", error);
     if (tableBody) {
-      tableBody.innerHTML = `<tr><td colspan='10' style='text-align: center; color: red;'>Ошибка загрузки данных: ${error.message}</td></tr>`;
+      tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center; color: red;'>Ошибка загрузки данных: ${error.message}</td></tr>`;
     }
   }
 }

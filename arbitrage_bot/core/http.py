@@ -104,7 +104,8 @@ class HttpClientFactory:
                         continue
                     if e.status == 403:
                         # Don't retry on 403 - IP blocked or API changed
-                        log.error("Access forbidden (403) for %s - may be IP blocked or API changed. Not retrying.", url)
+                        # Логируем только как debug, чтобы не засорять логи
+                        log.debug("Access forbidden (403) for %s - may be IP blocked or API changed. Not retrying.", url)
                         raise
                     raise
         raise aiohttp.ClientResponseError(
