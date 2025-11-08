@@ -759,11 +759,39 @@ function renderExchangeStatus(statuses) {
         : null;
       const ageText = age !== null && age < 60 ? `${age}с` : age !== null ? `${Math.floor(age / 60)}м` : "";
       
+      // quote_count теперь показывает количество уникальных монет с котировками
+      const coinCount = status.quote_count || 0;
+      const formattedCount = coinCount.toLocaleString('ru-RU');
+      
+      // Формируем детали статуса
+      let details = [];
+      if (coinCount > 0) {
+        details.push(`Монет: ${formattedCount}`);
+      } else {
+        details.push("Нет данных");
+      }
+      if (ageText) {
+        details.push(`Обновлено: ${ageText} назад`);
+      }
+      if (status.error_count > 0) {
+        details.push(`Ошибок: ${status.error_count}`);
+      }
+      if (status.last_error) {
+        details.push(`Ошибка: ${status.last_error.substring(0, 50)}`);
+      }
+      
+      const tooltip = `${status.connected ? '✅ Подключено' : '❌ Отключено'} • ${details.join(' • ')}`;
+      
       return `
-        <div class="exchange-status-item" title="${status.connected ? 'Подключено' : 'Отключено'} • Котировок: ${status.quote_count || 0}${status.last_error ? ` • Ошибка: ${status.last_error}` : ''}">
+        <div class="exchange-status-item" title="${tooltip}">
           <div class="exchange-status-indicator ${status.connected ? "connected" : "disconnected"}"></div>
           <span class="exchange-status-name">${status.name.toUpperCase()}</span>
-          <span class="exchange-status-details">${status.quote_count || 0}${ageText ? ` • ${ageText}` : ""}</span>
+          <span class="exchange-status-details">
+            ${status.connected ? '✅' : '❌'} 
+            ${coinCount > 0 ? `${formattedCount} монет` : '0 монет'} 
+            ${ageText ? ` • ${ageText}` : ''}
+            ${status.error_count > 0 ? ` • ⚠️${status.error_count}` : ''}
+          </span>
         </div>
       `;
     })

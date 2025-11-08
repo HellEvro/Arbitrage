@@ -38,6 +38,8 @@ class QuoteAggregator:
         # Exchange status tracking
         self._exchange_status: dict[str, ExchangeStatus] = {}
         self._status_lock = asyncio.Lock()
+        # Track unique symbols per exchange (for quote_count)
+        self._exchange_symbols: dict[str, set[str]] = {}
         self._rebuild_mappings()
         
         # Initialize status for all adapters
@@ -50,6 +52,7 @@ class QuoteAggregator:
                 error_count=0,
                 last_error=None,
             )
+            self._exchange_symbols[adapter.name] = set()
 
     async def start(self) -> None:
         if self._tasks:
@@ -96,7 +99,6 @@ class QuoteAggregator:
         Continues trying to reconnect even if adapter fails, ensuring system
         works with minimum 2 exchanges. Uses exponential backoff for retries.
         """
-        quote_count = 0
         retry_delay = 5.0  # Start with 5 seconds
         max_retry_delay = 300.0  # Max 5 minutes
         consecutive_failures = 0
@@ -126,21 +128,24 @@ class QuoteAggregator:
                         base_asset=base_asset,
                         quote_asset=quote_asset,
                     )
-                    quote_count += 1
                     
-                    # Update exchange status
+                    # Track unique symbols for this exchange
                     async with self._status_lock:
+                        self._exchange_symbols[adapter.name].add(canonical)
                         status = self._exchange_status[adapter.name]
                         status.connected = True
                         status.last_update_ms = quote.timestamp_ms
-                        status.quote_count = quote_count
+                        status.quote_count = len(self._exchange_symbols[adapter.name])  # Count unique symbols
                         status.error_count = 0
                         status.last_error = None
                     
-                    if quote_count % 100 == 0:
-                        log.debug("Received %d quotes from %s", quote_count, adapter.name)
+                    unique_count = len(self._exchange_symbols[adapter.name])
+                    if unique_count > 0 and unique_count % 10 == 0:
+                        log.debug("Tracking %d unique symbols from %s", unique_count, adapter.name)
             except asyncio.CancelledError:
-                log.info("Quote stream cancelled for %s (received %d quotes)", adapter.name, quote_count)
+                async with self._status_lock:
+                    unique_count = len(self._exchange_symbols[adapter.name])
+                log.info("Quote stream cancelled for %s (tracking %d unique symbols)", adapter.name, unique_count)
                 raise
             except Exception as exc:
                 consecutive_failures += 1
@@ -148,6 +153,7 @@ class QuoteAggregator:
                 
                 # Update exchange status
                 async with self._status_lock:
+                    unique_count = len(self._exchange_symbols[adapter.name])
                     status = self._exchange_status[adapter.name]
                     status.connected = False
                     status.error_count = consecutive_failures
@@ -159,21 +165,21 @@ class QuoteAggregator:
                     # For 403 errors, wait longer before retry
                     retry_delay_403 = min(retry_delay * 3, max_retry_delay)
                     log.warning(
-                        "Quote stream failed for %s with 403 Forbidden (failure #%d, received %d quotes). "
+                        "Quote stream failed for %s with 403 Forbidden (failure #%d, tracking %d symbols). "
                         "IP may be blocked. Waiting %.1f seconds before retry...",
                         adapter.name,
                         consecutive_failures,
-                        quote_count,
+                        unique_count,
                         retry_delay_403
                     )
                     await asyncio.sleep(retry_delay_403)
                     retry_delay = min(retry_delay * 1.5, max_retry_delay)
                 else:
                     log.warning(
-                        "Quote stream failed for %s (failure #%d, received %d quotes): %s. Retrying in %.1f seconds...",
+                        "Quote stream failed for %s (failure #%d, tracking %d symbols): %s. Retrying in %.1f seconds...",
                         adapter.name,
                         consecutive_failures,
-                        quote_count,
+                        unique_count,
                         exc,
                         retry_delay
                     )
@@ -184,6 +190,9 @@ class QuoteAggregator:
     def update_markets(self, markets: Sequence[MarketInfo]) -> None:
         self._markets = list(markets)
         self._rebuild_mappings()
+        # Reset symbol tracking when markets change (without lock - called from sync context)
+        for exchange_name in self._exchange_symbols:
+            self._exchange_symbols[exchange_name].clear()
 
     async def refresh_markets(self, markets: Sequence[MarketInfo]) -> None:
         new_markets = list(markets)
@@ -229,11 +238,15 @@ class QuoteAggregator:
                 if status.connected and status.last_update_ms:
                     if now_ms - status.last_update_ms > stale_threshold_ms:
                         status.connected = False
+                
+                # Update quote_count from current unique symbols count
+                current_quote_count = len(self._exchange_symbols.get(name, set()))
+                
                 result[name] = ExchangeStatus(
                     name=status.name,
                     connected=status.connected,
                     last_update_ms=status.last_update_ms,
-                    quote_count=status.quote_count,
+                    quote_count=current_quote_count,  # Use current count of unique symbols
                     error_count=status.error_count,
                     last_error=status.last_error,
                 )
