@@ -1,0 +1,56 @@
+ exchanges:
+   - bybit
+   - mexc
+   - bitget
+   - okx
+   - kucoin
+
+ notional_usdt_default: 1000
+ fees:
+   bybit:
+     taker: 0.001
+     maker: 0.001
+   mexc:
+     taker: 0.001
+     maker: 0.001
+   bitget:
+     taker: 0.001
+     maker: 0.001
+   okx:
+     taker: 0.001
+     maker: 0.001
+   kucoin:
+     taker: 0.001
+     maker: 0.001
+
+ slippage_bps: 3
+
+ thresholds:
+   min_profit_usdt: 0.5
+   min_spread_pct: 0.05
+   stale_ms: 1500
+
+ telegram:
+   enabled: true
+   bot_token: "<YOUR_TOKEN>"
+   chat_id: "<YOUR_CHAT_ID>"
+   notify_interval_sec: 60
+   min_profit_usdt: 1.0
+
+ web:
+   host: "0.0.0.0"
+   port: 5152
+   cors_origins:
+     - "*"
+
+ logging:
+   level: "INFO"
+   json: false
+
+ redis:
+   enabled: false
+   url: "redis://localhost:6379/0"
+   namespace: "arbitrage_bot"
+
+ exchange_overrides: {}
+

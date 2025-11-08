@@ -1,0 +1,31 @@
+ <!doctype html>
+ <html lang="ru">
+   <head>
+     <meta charset="utf-8" />
+     <title>Arbitrage Ranking</title>
+     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-Pd3480LKPoHYGwE6bjRqRSyLleNgBu4dGzTgnpwrgGqv4A1haW2d9b9ntzaBUcqS" crossorigin="anonymous"></script>
+   </head>
+   <body>
+     <main>
+       <h1>Arbitrage Opportunities</h1>
+       <table id="ranking-table">
+         <thead>
+           <tr>
+             <th>Монета</th>
+             <th>Биржа min</th>
+             <th>Цена min</th>
+             <th>Биржа max</th>
+             <th>Цена max</th>
+             <th>Разница (USDT)</th>
+             <th>%</th>
+             <th>Обновлено (мс)</th>
+           </tr>
+         </thead>
+         <tbody></tbody>
+       </table>
+     </main>
+     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+   </body>
+ </html>
+

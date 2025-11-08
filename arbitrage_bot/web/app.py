@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import asdict
+from typing import Any
+
+from flask import Flask, jsonify, render_template, request
+from flask_socketio import SocketIO
+
+from arbitrage_bot.config import Settings
+from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
+from arbitrage_bot.services.market_discovery import MarketDiscoveryService
+from arbitrage_bot.services.quote_store import QuoteStore
+from arbitrage_bot.services.telegram_notifier import TelegramNotifier
+
+log = logging.getLogger(__name__)
+
+
+def create_app(
+    settings: Settings | None = None,
+    arbitrage_engine: ArbitrageEngine | None = None,
+    discovery: MarketDiscoveryService | None = None,
+    quote_store: QuoteStore | None = None,
+    notifier: TelegramNotifier | None = None,
+) -> tuple[Flask, SocketIO]:
+    app = Flask(__name__, static_folder="static", template_folder="templates")
+    cors = settings.web.cors_origins if settings else ["*"]
+    socketio = SocketIO(app, async_mode="asgi", cors_allowed_origins=cors)
+    log.info("Flask app created with SocketIO")
+
+    @app.route("/api/status")
+    def status() -> Any:
+        log.debug("Status endpoint called")
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/ranking")
+    async def ranking() -> Any:
+        if not arbitrage_engine:
+            return jsonify([])
+        opportunities = await arbitrage_engine.get_latest()
+        payload = [
+            {
+                "symbol": opp.symbol,
+                "buy_exchange": opp.buy_exchange,
+                "buy_price": opp.buy_price,
+                "buy_symbol": opp.buy_symbol,
+                "sell_exchange": opp.sell_exchange,
+                "sell_price": opp.sell_price,
+                "sell_symbol": opp.sell_symbol,
+                "spread_usdt": opp.spread_usdt,
+                "spread_pct": opp.spread_pct,
+                "timestamp_ms": opp.timestamp_ms,
+            }
+            for opp in opportunities
+        ]
+        return jsonify(payload)
+
+    @app.route("/")
+    def index() -> Any:
+        return render_template("index.html")
+
+    @app.route("/internal/markets")
+    async def internal_markets() -> Any:
+        if not discovery:
+            return jsonify([])
+        markets = await discovery.get_cached()
+        payload = [
+            {
+                "symbol": market.symbol,
+                "exchanges": list(market.exchanges),
+                "exchange_symbols": market.exchange_symbols,
+            }
+            for market in markets
+        ]
+        return jsonify(payload)
+
+    @app.route("/internal/quote", methods=["POST"])
+    async def internal_quote() -> Any:
+        if not quote_store:
+            return jsonify({"status": "disabled"}), 503
+        data = request.get_json(silent=True) or {}
+        symbol = data.get("symbol")
+        exchange = data.get("exchange")
+        price = data.get("price")
+        timestamp_ms = data.get("timestamp_ms")
+        native_symbol = data.get("exchange_symbol")
+        if not symbol or not exchange or price is None:
+            return jsonify({"error": "symbol, exchange, and price are required"}), 400
+        try:
+            price_value = float(price)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid price"}), 400
+        ts_value: int | None
+        try:
+            ts_value = int(timestamp_ms) if timestamp_ms is not None else None
+        except (TypeError, ValueError):
+            ts_value = None
+        await quote_store.upsert(
+            symbol.upper(),
+            exchange.lower(),
+            price_value,
+            timestamp_ms=ts_value,
+            native_symbol=native_symbol,
+        )
+        return jsonify({"status": "ok"})
+
+    @app.route("/internal/telegram/status")
+    def telegram_status() -> Any:
+        if not notifier:
+            return jsonify({"enabled": False})
+        return jsonify({"enabled": notifier.is_enabled()})
+
+    @app.route("/internal/telegram/toggle", methods=["POST"])
+    def telegram_toggle() -> Any:
+        if not notifier:
+            return jsonify({"error": "notifier unavailable"}), 503
+        data = request.get_json(silent=True) or {}
+        if "enabled" not in data:
+            return jsonify({"error": "enabled flag required"}), 400
+        notifier.set_enabled(bool(data["enabled"]))
+        return jsonify({"enabled": notifier.is_enabled()})
+
+    if arbitrage_engine:
+
+        async def emit_loop() -> None:
+            log.info("Starting WebSocket emit loop")
+            while True:
+                opportunities = await arbitrage_engine.get_latest()
+                socketio.emit("opportunities", [asdict(opp) for opp in opportunities])
+                await asyncio.sleep(1)
+
+        socketio.start_background_task(emit_loop)
+
+    return app, socketio
+

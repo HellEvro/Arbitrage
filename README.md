@@ -9,7 +9,16 @@
  source .venv/bin/activate  # or .venv\Scripts\activate on Windows
  pip install -e ".[dev]"
  cp config/config.example.yaml config/config.yaml
+python main.py
  ```
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Override configuration via `config/config.yaml` (mounted read-only by default).
 
  ## Components
 
