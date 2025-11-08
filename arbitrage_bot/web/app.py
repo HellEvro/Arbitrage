@@ -26,8 +26,26 @@ def create_app(
 ) -> tuple[Flask, SocketIO]:
     app = Flask(__name__, static_folder="static", template_folder="templates")
     cors = settings.web.cors_origins if settings else ["*"]
+    # For Socket.IO, explicitly allow localhost origins
+    # Flask-SocketIO: "*" = allow all, list = specific origins
+    if cors == ["*"] or (isinstance(cors, list) and "*" in cors):
+        socketio_cors = "*"  # Allow all origins for development
+    else:
+        socketio_cors = list(cors) if isinstance(cors, list) else [cors]
+        # Always add localhost variants
+        localhost_origins = ["http://localhost:5152", "http://127.0.0.1:5152"]
+        for origin in localhost_origins:
+            if origin not in socketio_cors:
+                socketio_cors.append(origin)
     # Use threading mode - Flask-SocketIO will handle async operations
-    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=cors, logger=False, engineio_logger=False)
+    socketio = SocketIO(
+        app,
+        async_mode="threading",
+        cors_allowed_origins=socketio_cors,
+        allow_unsafe_werkzeug=True,
+        logger=False,
+        engineio_logger=False
+    )
     log.info("Flask app created with SocketIO")
 
     @app.route("/api/status")
