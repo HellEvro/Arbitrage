@@ -273,12 +273,26 @@ function renderOpportunities(opportunities) {
           return status.connected && status.quote_count > 0;
         });
         
+        // Проверяем, есть ли хотя бы две биржи с данными (минимум для арбитража)
+        const connectedExchanges = exchangeNames.filter(name => {
+          const status = statuses[name];
+          return status.connected && status.quote_count > 0;
+        });
+        const hasEnoughExchanges = connectedExchanges.length >= 2;
+        
         if (allOffline) {
           message = "Сервера недоступны";
-        } else if (!hasAnyData || !state.hasReceivedData) {
+        } else if (!hasAnyData) {
           // Если биржи подключены, но данных еще нет - идет загрузка
           message = "Идет загрузка данных...";
+        } else if (!hasEnoughExchanges) {
+          // Если есть данные только с одной биржи - недостаточно для арбитража
+          message = "Ожидание данных с других бирж...";
+        } else if (!state.hasReceivedData) {
+          // Если есть данные с нескольких бирж, но еще не получены возможности - идет загрузка
+          message = "Идет загрузка данных...";
         }
+        // Если hasEnoughExchanges && hasReceivedData - показываем "Нет данных" (нет возможностей арбитража)
       } else if (!state.hasReceivedData && socket.connected) {
         // Если статусы бирж еще не загружены, но WebSocket подключен - идет загрузка
         message = "Идет загрузка данных...";
@@ -392,9 +406,19 @@ function renderOpportunities(opportunities) {
         return !status.connected || (status.quote_count === 0);
       });
       
+      // Проверяем, есть ли хотя бы две биржи с данными
+      const connectedExchanges = exchangeNames.filter(name => {
+        const status = statuses[name];
+        return status.connected && status.quote_count > 0;
+      });
+      const hasEnoughExchanges = connectedExchanges.length >= 2;
+      
       if (allOffline) {
         message = "Сервера недоступны";
+      } else if (!hasEnoughExchanges) {
+        message = "Ожидание данных с других бирж...";
       }
+      // Если hasEnoughExchanges - показываем "Нет данных" (нет возможностей арбитража после фильтрации)
     }
     
     html = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;

@@ -42,11 +42,22 @@ class BitgetAdapter(BaseAdapter):
         return markets
 
     async def quote_stream(self, symbols: Sequence[str]) -> AsyncIterator[ExchangeQuote]:
-        watched = {symbol.upper() for symbol in symbols}
-        if not watched:
-            self._log.warning("No symbols to watch")
+        # Bitget API returns symbols without _SPBL suffix in ticker endpoint
+        # but fetch_markets returns symbols with _SPBL suffix
+        # Create mapping: symbol with suffix -> symbol without suffix
+        watched_with_suffix = {symbol.upper() for symbol in symbols}
+        watched_without_suffix = set()
+        for symbol in watched_with_suffix:
+            # Remove _SPBL suffix if present
+            if symbol.endswith("_SPBL"):
+                watched_without_suffix.add(symbol[:-5])  # Remove "_SPBL"
+            else:
+                watched_without_suffix.add(symbol)
+        
+        if not watched_without_suffix:
+            self._log.warning("No symbols to watch after processing")
             return
-        self._log.info("Starting quote stream for %d symbols", len(watched))
+        self._log.info("Starting quote stream for %d symbols (processed %d without suffix)", len(watched_with_suffix), len(watched_without_suffix))
         quote_yielded = 0
         while not self.closed:
             try:
@@ -60,27 +71,40 @@ class BitgetAdapter(BaseAdapter):
                 ts = int(time.time() * 1000)
                 matched_count = 0
                 for item in entries:
-                    symbol = item.get("symbol", "").upper()
-                    if symbol not in watched:
+                    symbol_api = item.get("symbol", "").upper()
+                    if symbol_api not in watched_without_suffix:
+                        continue
+                    # Map back to original symbol format (with _SPBL if it was there)
+                    # Find the original symbol that matches this API symbol
+                    original_symbol = None
+                    for sym in watched_with_suffix:
+                        if sym.endswith("_SPBL") and sym[:-5] == symbol_api:
+                            original_symbol = sym
+                            break
+                        elif sym == symbol_api:
+                            original_symbol = sym
+                            break
+                    if not original_symbol:
                         continue
                     bid = self._to_float(item.get("bidPr"))
                     ask = self._to_float(item.get("askPr"))
                     if bid <= 0 or ask <= 0:
-                        self._log.debug("Invalid price for %s: bidPr=%s, askPr=%s", symbol, item.get("bidPr"), item.get("askPr"))
+                        self._log.debug("Invalid price for %s: bidPr=%s, askPr=%s", original_symbol, item.get("bidPr"), item.get("askPr"))
                         continue
-                    yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
+                    # Yield with original symbol format (with _SPBL suffix) so quote_aggregator can map it correctly
+                    yield ExchangeQuote(symbol=original_symbol, bid=bid, ask=ask, timestamp_ms=ts)
                     quote_yielded += 1
                     matched_count += 1
                 
                 if matched_count == 0:
                     # Log first few watched symbols for debugging
-                    sample_symbols = list(watched)[:5]
+                    sample_symbols = list(watched_without_suffix)[:5]
                     sample_entries = [item.get("symbol", "").upper() for item in entries[:10]]
                     self._log.warning(
-                        "Bitget: No matching symbols found. Watched: %s (total: %d), "
+                        "Bitget: No matching symbols found. Watched (without suffix): %s (total: %d), "
                         "Sample from API: %s (total entries: %d)",
                         sample_symbols,
-                        len(watched),
+                        len(watched_without_suffix),
                         sample_entries,
                         len(entries)
                     )

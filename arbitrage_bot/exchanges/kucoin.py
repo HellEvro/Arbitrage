@@ -40,21 +40,30 @@ class KucoinAdapter(BaseAdapter):
         return markets
 
     async def quote_stream(self, symbols: Sequence[str]) -> AsyncIterator[ExchangeQuote]:
-        # KuCoin uses format "ACE-USDT" but we receive canonical "ACEUSDT"
-        # Create mapping: canonical -> KuCoin format
-        watched_canonical = {symbol.upper() for symbol in symbols}
-        watched_kucoin = set()
-        # Convert canonical symbols to KuCoin format (add hyphen)
-        for canonical in watched_canonical:
-            if canonical.endswith("USDT") and len(canonical) > 4:
-                base = canonical[:-4]  # Remove "USDT"
-                kucoin_symbol = f"{base}-USDT"
-                watched_kucoin.add(kucoin_symbol)
+        # KuCoin uses format "ACE-USDT"
+        # Symbols from quote_aggregator are already in KuCoin format (from fetch_markets)
+        # So we should use them as-is, not convert from canonical format
+        watched_kucoin = {symbol.upper() for symbol in symbols}
         
-        if not watched_kucoin:
-            self._log.warning("No symbols to watch after conversion")
+        # However, if we receive canonical format (without hyphen), convert it
+        # But check if symbols already have hyphen first
+        processed_kucoin = set()
+        for symbol in watched_kucoin:
+            if "-" in symbol:
+                # Already in KuCoin format
+                processed_kucoin.add(symbol)
+            elif symbol.endswith("USDT") and len(symbol) > 4:
+                # Canonical format, convert to KuCoin format
+                base = symbol[:-4]  # Remove "USDT"
+                processed_kucoin.add(f"{base}-USDT")
+            else:
+                # Unknown format, use as-is
+                processed_kucoin.add(symbol)
+        
+        if not processed_kucoin:
+            self._log.warning("No symbols to watch after processing")
             return
-        self._log.info("Starting quote stream for %d symbols (%d KuCoin format)", len(watched_canonical), len(watched_kucoin))
+        self._log.info("Starting quote stream for %d symbols (processed %d KuCoin format)", len(watched_kucoin), len(processed_kucoin))
         quote_yielded = 0
         while not self.closed:
             try:
@@ -69,30 +78,45 @@ class KucoinAdapter(BaseAdapter):
                 matched_count = 0
                 for item in entries:
                     symbol_kucoin = item.get("symbol", "").upper()
-                    if symbol_kucoin not in watched_kucoin:
+                    if symbol_kucoin not in processed_kucoin:
                         continue
+                    # Find the original symbol format (might have hyphen or not)
+                    original_symbol = None
+                    for sym in watched_kucoin:
+                        if sym == symbol_kucoin:
+                            original_symbol = sym
+                            break
+                        elif sym.endswith("USDT") and len(sym) > 4:
+                            # Check if canonical format matches
+                            base = sym[:-4]
+                            if f"{base}-USDT" == symbol_kucoin:
+                                original_symbol = sym
+                                break
+                    if not original_symbol:
+                        # Use KuCoin format as fallback
+                        original_symbol = symbol_kucoin
                     # KuCoin returns prices as strings, parse them carefully
                     buy_str = item.get("buy", "")
                     sell_str = item.get("sell", "")
                     bid = self._to_float(buy_str)
                     ask = self._to_float(sell_str)
                     if bid <= 0 or ask <= 0:
-                        self._log.debug("Invalid price for %s: bid=%s, ask=%s", symbol_kucoin, buy_str, sell_str)
+                        self._log.debug("Invalid price for %s: bid=%s, ask=%s", original_symbol, buy_str, sell_str)
                         continue
-                    # Yield with KuCoin format symbol - quote_aggregator will map it correctly
-                    yield ExchangeQuote(symbol=symbol_kucoin, bid=bid, ask=ask, timestamp_ms=ts)
+                    # Yield with original symbol format so quote_aggregator can map it correctly
+                    yield ExchangeQuote(symbol=original_symbol, bid=bid, ask=ask, timestamp_ms=ts)
                     quote_yielded += 1
                     matched_count += 1
                 
                 if matched_count == 0:
                     # Log first few watched symbols for debugging
-                    sample_watched = list(watched_kucoin)[:5]
+                    sample_watched = list(processed_kucoin)[:5]
                     sample_entries = [item.get("symbol", "").upper() for item in entries[:10]]
                     self._log.warning(
-                        "KuCoin: No matching symbols found. Watched: %s (total: %d), "
+                        "KuCoin: No matching symbols found. Watched (processed): %s (total: %d), "
                         "Sample from API: %s (total entries: %d)",
                         sample_watched,
-                        len(watched_kucoin),
+                        len(processed_kucoin),
                         sample_entries,
                         len(entries)
                     )

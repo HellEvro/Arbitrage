@@ -43,6 +43,9 @@ def find_process_on_port(port: int) -> list[int]:
                     if len(parts) >= 5:
                         try:
                             pid = int(parts[-1])
+                            # CRITICAL: Skip invalid PIDs (0 = TIME_WAIT connections, negative = invalid)
+                            if pid <= 0:
+                                continue
                             # CRITICAL: Skip current process
                             if pid == current_pid:
                                 log.debug("Skipping current process %d on port %d", pid, port)
@@ -66,6 +69,9 @@ def find_process_on_port(port: int) -> list[int]:
                     for pid_str in result.stdout.strip().split():
                         try:
                             pid = int(pid_str)
+                            # CRITICAL: Skip invalid PIDs (0 = TIME_WAIT connections, negative = invalid)
+                            if pid <= 0:
+                                continue
                             # CRITICAL: Skip current process
                             if pid == current_pid:
                                 log.debug("Skipping current process %d on port %d (PowerShell)", pid, port)
@@ -394,12 +400,21 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
         log.info("No processes found on port %d", port)
         return True
     
+    # Filter out invalid PIDs (0 = TIME_WAIT connections, negative = invalid)
+    valid_pids = [pid for pid in pids if pid > 0]
+    
+    if not valid_pids:
+        log.info("Only TIME_WAIT connections found on port %d (no active processes)", port)
+        return True
+    
     # CRITICAL: Remove current process from list (shouldn't be there, but safety check)
     current_pid = os.getpid()
-    pids = [pid for pid in pids if pid != current_pid]
+    valid_pids = [pid for pid in valid_pids if pid != current_pid]
     
-    if not pids:
+    if not valid_pids:
         return True
+    
+    pids = valid_pids  # Use filtered list
     
     # Check which are Python processes - simplified
     # If we found processes by command line, they're already Python processes
