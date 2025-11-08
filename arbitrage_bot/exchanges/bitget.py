@@ -47,18 +47,47 @@ class BitgetAdapter(BaseAdapter):
             self._log.warning("No symbols to watch")
             return
         self._log.info("Starting quote stream for %d symbols", len(watched))
+        quote_yielded = 0
         while not self.closed:
-            data = await self._http.get_json(f"{self._REST_BASE}/api/spot/v1/market/tickers")
-            entries = data.get("data", [])
-            ts = int(time.time() * 1000)
-            for item in entries:
-                symbol = item.get("symbol", "").upper()
-                if symbol not in watched:
+            try:
+                data = await self._http.get_json(f"{self._REST_BASE}/api/spot/v1/market/tickers")
+                entries = data.get("data", [])
+                if not entries:
+                    self._log.warning("Bitget API returned empty data array")
+                    await self.wait_interval()
                     continue
-                bid = self._to_float(item.get("bidPr"))
-                ask = self._to_float(item.get("askPr"))
-                if bid <= 0 or ask <= 0:
-                    continue
-                yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
+                
+                ts = int(time.time() * 1000)
+                matched_count = 0
+                for item in entries:
+                    symbol = item.get("symbol", "").upper()
+                    if symbol not in watched:
+                        continue
+                    bid = self._to_float(item.get("bidPr"))
+                    ask = self._to_float(item.get("askPr"))
+                    if bid <= 0 or ask <= 0:
+                        self._log.debug("Invalid price for %s: bidPr=%s, askPr=%s", symbol, item.get("bidPr"), item.get("askPr"))
+                        continue
+                    yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
+                    quote_yielded += 1
+                    matched_count += 1
+                
+                if matched_count == 0:
+                    # Log first few watched symbols for debugging
+                    sample_symbols = list(watched)[:5]
+                    sample_entries = [item.get("symbol", "").upper() for item in entries[:10]]
+                    self._log.warning(
+                        "Bitget: No matching symbols found. Watched: %s (total: %d), "
+                        "Sample from API: %s (total entries: %d)",
+                        sample_symbols,
+                        len(watched),
+                        sample_entries,
+                        len(entries)
+                    )
+                elif quote_yielded % 100 == 0:
+                    self._log.debug("Bitget: yielded %d quotes total, %d in this batch", quote_yielded, matched_count)
+            except Exception as e:
+                self._log.error("Bitget quote stream error: %s", e, exc_info=True)
+                raise
             await self.wait_interval()
 

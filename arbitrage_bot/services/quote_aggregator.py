@@ -97,20 +97,19 @@ class QuoteAggregator:
         """Run adapter with automatic retry on failures.
         
         Continues trying to reconnect even if adapter fails, ensuring system
-        works with minimum 2 exchanges. Uses exponential backoff for retries.
+        works with minimum 2 exchanges. Uses fixed retry delay (5-10 seconds).
         """
-        retry_delay = 5.0  # Start with 5 seconds
-        max_retry_delay = 300.0  # Max 5 minutes
+        retry_delay = 5.0  # Fixed retry delay: 5 seconds
+        retry_delay_403 = 10.0  # Fixed delay for 403 errors: 10 seconds
         consecutive_failures = 0
         
         while not adapter.closed:
             try:
                 log.info("Starting quote stream for %s (attempt %d)", adapter.name, consecutive_failures + 1)
                 async for quote in adapter.quote_stream(symbols):
-                    # Reset retry delay on successful quote
+                    # Reset failure counter on successful quote
                     if consecutive_failures > 0:
                         consecutive_failures = 0
-                        retry_delay = 5.0
                         log.info("Quote stream recovered for %s", adapter.name)
                     
                     canonical = self._reverse_map.get((adapter.name, quote.symbol.upper()))
@@ -162,8 +161,6 @@ class QuoteAggregator:
                 # Check if it's a 403 error (IP blocked)
                 is_403 = hasattr(exc, 'status') and exc.status == 403
                 if is_403:
-                    # For 403 errors, wait longer before retry
-                    retry_delay_403 = min(retry_delay * 3, max_retry_delay)
                     log.warning(
                         "Quote stream failed for %s with 403 Forbidden (failure #%d, tracking %d symbols). "
                         "IP may be blocked. Waiting %.1f seconds before retry...",
@@ -173,7 +170,6 @@ class QuoteAggregator:
                         retry_delay_403
                     )
                     await asyncio.sleep(retry_delay_403)
-                    retry_delay = min(retry_delay * 1.5, max_retry_delay)
                 else:
                     log.warning(
                         "Quote stream failed for %s (failure #%d, tracking %d symbols): %s. Retrying in %.1f seconds...",
@@ -183,9 +179,8 @@ class QuoteAggregator:
                         exc,
                         retry_delay
                     )
-                    # Exponential backoff with max limit
+                    # Fixed retry delay (no exponential backoff)
                     await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 1.5, max_retry_delay)
 
     def update_markets(self, markets: Sequence[MarketInfo]) -> None:
         self._markets = list(markets)

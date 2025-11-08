@@ -15,12 +15,16 @@ const state = {
   expandedGroups: JSON.parse(localStorage.getItem("arbitrage_expandedGroups") || "[]"), // Раскрытые группы
   searchQuery: "", // Поисковый запрос
   allGroupsExpandedMode: localStorage.getItem("arbitrage_allGroupsExpandedMode") === "true", // Режим: все раскрыты (true) или все закрыты (false)
+  hasReceivedData: false, // Получены ли данные хотя бы раз
+  exchangeStatuses: {}, // Статусы бирж
 };
 
 console.log("Socket.IO initialized:", socket.connected);
 
 socket.on("connect", () => {
   console.log("WebSocket connected");
+  // При подключении WebSocket перерисовываем таблицу, чтобы обновить сообщение о статусе
+  renderOpportunities(state.opportunities);
 });
 
 socket.on("disconnect", () => {
@@ -249,7 +253,38 @@ function renderOpportunities(opportunities) {
   if (!Array.isArray(opportunities) || opportunities.length === 0) {
     console.warn("No opportunities to render:", opportunities);
     if (tableBody) {
-      tableBody.innerHTML = "<tr><td colspan='12' style='text-align: center;'>Нет данных</td></tr>";
+      // Определяем состояние для отображения сообщения
+      let message = "Нет данных";
+      
+      // Проверяем статус бирж
+      const statuses = state.exchangeStatuses || {};
+      const exchangeNames = Object.keys(statuses);
+      
+      if (exchangeNames.length > 0) {
+        // Проверяем, все ли биржи оффлайн (0 монет или не подключены)
+        const allOffline = exchangeNames.every(name => {
+          const status = statuses[name];
+          return !status.connected || (status.quote_count === 0);
+        });
+        
+        // Проверяем, есть ли хотя бы одна биржа с данными
+        const hasAnyData = exchangeNames.some(name => {
+          const status = statuses[name];
+          return status.connected && status.quote_count > 0;
+        });
+        
+        if (allOffline) {
+          message = "Сервера недоступны";
+        } else if (!hasAnyData || !state.hasReceivedData) {
+          // Если биржи подключены, но данных еще нет - идет загрузка
+          message = "Идет загрузка данных...";
+        }
+      } else if (!state.hasReceivedData && socket.connected) {
+        // Если статусы бирж еще не загружены, но WebSocket подключен - идет загрузка
+        message = "Идет загрузка данных...";
+      }
+      
+      tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
     }
     return;
   }
@@ -343,7 +378,26 @@ function renderOpportunities(opportunities) {
   }
   
   if (html === "") {
-    html = "<tr><td colspan='12' style='text-align: center;'>Нет данных</td></tr>";
+    // Определяем состояние для отображения сообщения
+    let message = "Нет данных";
+    
+    // Проверяем статус бирж
+    const statuses = state.exchangeStatuses || {};
+    const exchangeNames = Object.keys(statuses);
+    
+    if (exchangeNames.length > 0) {
+      // Проверяем, все ли биржи оффлайн (0 монет или не подключены)
+      const allOffline = exchangeNames.every(name => {
+        const status = statuses[name];
+        return !status.connected || (status.quote_count === 0);
+      });
+      
+      if (allOffline) {
+        message = "Сервера недоступны";
+      }
+    }
+    
+    html = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
   }
   
   tableBody.innerHTML = html;
@@ -476,13 +530,17 @@ socket.on("opportunities", (data) => {
   }
   console.log("Received opportunities via WebSocket:", data?.length || 0);
   state.opportunities = data || [];
+  state.hasReceivedData = true; // Отмечаем, что данные получены
   renderOpportunities(state.opportunities);
 });
 
 // Обработка статуса бирж
 socket.on("exchange_status", (statuses) => {
   console.log("Received exchange status:", statuses);
+  state.exchangeStatuses = statuses || {}; // Сохраняем статусы в state
   renderExchangeStatus(statuses);
+  // Перерисовываем таблицу, чтобы обновить сообщение о статусе
+  renderOpportunities(state.opportunities);
 });
 
 // Управление табами
@@ -808,22 +866,31 @@ async function fetchInitial() {
     }
     const data = await response.json();
     console.log("Initial data received:", data?.length || 0, "opportunities");
-    state.opportunities = data || [];
-    renderOpportunities(state.opportunities);
+    // Обновляем данные только если WebSocket еще не подключен или данных еще нет
+    // Это предотвращает перезапись данных, которые уже пришли через WebSocket
+    if (!state.hasReceivedData || state.opportunities.length === 0) {
+      state.opportunities = data || [];
+      state.hasReceivedData = true; // Отмечаем, что данные получены
+      renderOpportunities(state.opportunities);
+    }
     
-    // Загрузить статус бирж
+    // Загрузить статус бирж (всегда обновляем статус, так как он может измениться)
     try {
       const statusResponse = await fetch("/api/exchange-status");
       if (statusResponse.ok) {
         const statusData = await statusResponse.json();
+        state.exchangeStatuses = statusData || {}; // Сохраняем статусы в state
         renderExchangeStatus(statusData);
+        // Перерисовываем таблицу, чтобы обновить сообщение о статусе
+        renderOpportunities(state.opportunities);
       }
     } catch (e) {
       console.warn("Failed to load exchange status:", e);
     }
   } catch (error) {
     console.error("Failed to load initial data", error);
-    if (tableBody) {
+    // Не показываем ошибку, если WebSocket уже подключен и работает
+    if (!socket.connected && tableBody) {
       tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center; color: red;'>Ошибка загрузки данных: ${error.message}</td></tr>`;
     }
   }

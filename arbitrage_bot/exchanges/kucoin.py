@@ -55,23 +55,51 @@ class KucoinAdapter(BaseAdapter):
             self._log.warning("No symbols to watch after conversion")
             return
         self._log.info("Starting quote stream for %d symbols (%d KuCoin format)", len(watched_canonical), len(watched_kucoin))
+        quote_yielded = 0
         while not self.closed:
-            data = await self._http.get_json(f"{self._REST_BASE}/api/v1/market/allTickers")
-            entries = data.get("data", {}).get("ticker", [])
-            ts = int(data.get("data", {}).get("time", time.time() * 1000))
-            for item in entries:
-                symbol_kucoin = item.get("symbol", "").upper()
-                if symbol_kucoin not in watched_kucoin:
+            try:
+                data = await self._http.get_json(f"{self._REST_BASE}/api/v1/market/allTickers")
+                entries = data.get("data", {}).get("ticker", [])
+                if not entries:
+                    self._log.warning("KuCoin API returned empty ticker array")
+                    await self.wait_interval()
                     continue
-                # KuCoin returns prices as strings, parse them carefully
-                buy_str = item.get("buy", "")
-                sell_str = item.get("sell", "")
-                bid = self._to_float(buy_str)
-                ask = self._to_float(sell_str)
-                if bid <= 0 or ask <= 0:
-                    self._log.debug("Invalid price for %s: bid=%s, ask=%s", symbol_kucoin, buy_str, sell_str)
-                    continue
-                # Yield with KuCoin format symbol - quote_aggregator will map it correctly
-                yield ExchangeQuote(symbol=symbol_kucoin, bid=bid, ask=ask, timestamp_ms=ts)
+                
+                ts = int(data.get("data", {}).get("time", time.time() * 1000))
+                matched_count = 0
+                for item in entries:
+                    symbol_kucoin = item.get("symbol", "").upper()
+                    if symbol_kucoin not in watched_kucoin:
+                        continue
+                    # KuCoin returns prices as strings, parse them carefully
+                    buy_str = item.get("buy", "")
+                    sell_str = item.get("sell", "")
+                    bid = self._to_float(buy_str)
+                    ask = self._to_float(sell_str)
+                    if bid <= 0 or ask <= 0:
+                        self._log.debug("Invalid price for %s: bid=%s, ask=%s", symbol_kucoin, buy_str, sell_str)
+                        continue
+                    # Yield with KuCoin format symbol - quote_aggregator will map it correctly
+                    yield ExchangeQuote(symbol=symbol_kucoin, bid=bid, ask=ask, timestamp_ms=ts)
+                    quote_yielded += 1
+                    matched_count += 1
+                
+                if matched_count == 0:
+                    # Log first few watched symbols for debugging
+                    sample_watched = list(watched_kucoin)[:5]
+                    sample_entries = [item.get("symbol", "").upper() for item in entries[:10]]
+                    self._log.warning(
+                        "KuCoin: No matching symbols found. Watched: %s (total: %d), "
+                        "Sample from API: %s (total entries: %d)",
+                        sample_watched,
+                        len(watched_kucoin),
+                        sample_entries,
+                        len(entries)
+                    )
+                elif quote_yielded % 100 == 0:
+                    self._log.debug("KuCoin: yielded %d quotes total, %d in this batch", quote_yielded, matched_count)
+            except Exception as e:
+                self._log.error("KuCoin quote stream error: %s", e, exc_info=True)
+                raise
             await self.wait_interval()
 

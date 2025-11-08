@@ -64,8 +64,6 @@
           <span class="collapse-all-icon">▼</span>
         </button>
         <button class="tab-btn active" data-tab="main">Основная таблица</button>
-        <button class="tab-btn" data-tab="blacklist">Черный список</button>
-        <button class="tab-btn" data-tab="whitelist">Белый список</button>
         <button class="tab-btn" data-tab="settings">Настройки</button>
       </div>
 
@@ -96,32 +94,6 @@
           </div>
         </div>
 
-        <!-- Черный список -->
-        <div id="tab-blacklist" class="tab-pane">
-          <div class="list-management">
-            <h2>Черный список монет</h2>
-            <p class="help-text">Монеты из этого списка не будут отображаться в основной таблице</p>
-            <div class="add-item-form">
-              <input type="text" id="blacklist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
-              <button id="add-blacklist-btn" class="btn btn-primary">Добавить</button>
-            </div>
-            <div id="blacklist-items" class="list-items"></div>
-          </div>
-        </div>
-
-        <!-- Белый список -->
-        <div id="tab-whitelist" class="tab-pane">
-          <div class="list-management">
-            <h2>Белый список монет</h2>
-            <p class="help-text">Монеты из этого списка будут показываться в приоритете вверху таблицы</p>
-            <div class="add-item-form">
-              <input type="text" id="whitelist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
-              <button id="add-whitelist-btn" class="btn btn-primary">Добавить</button>
-            </div>
-            <div id="whitelist-items" class="list-items"></div>
-          </div>
-        </div>
-
         <!-- Настройки -->
         <div id="tab-settings" class="tab-pane">
           <div class="settings-panel">
@@ -147,6 +119,28 @@
             <div class="setting-item">
               <button id="clear-all-btn" class="btn btn-danger">Очистить все списки</button>
             </div>
+          </div>
+
+          <!-- Черный список -->
+          <div class="list-management" style="margin-top: 2rem;">
+            <h2>Черный список монет</h2>
+            <p class="help-text">Монеты из этого списка не будут отображаться в основной таблице</p>
+            <div class="add-item-form">
+              <input type="text" id="blacklist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+              <button id="add-blacklist-btn" class="btn btn-primary">Добавить</button>
+            </div>
+            <div id="blacklist-items" class="list-items"></div>
+          </div>
+
+          <!-- Белый список -->
+          <div class="list-management" style="margin-top: 2rem;">
+            <h2>Белый список монет</h2>
+            <p class="help-text">Монеты из этого списка будут показываться в приоритете вверху таблицы</p>
+            <div class="add-item-form">
+              <input type="text" id="whitelist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+              <button id="add-whitelist-btn" class="btn btn-primary">Добавить</button>
+            </div>
+            <div id="whitelist-items" class="list-items"></div>
           </div>
         </div>
       </div>

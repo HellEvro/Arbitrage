@@ -191,18 +191,59 @@ def create_app(
         return jsonify({"enabled": notifier.is_enabled()})
 
     if arbitrage_engine:
+        
+        @socketio.on("connect")
+        def handle_connect() -> None:
+            """Send initial data immediately when client connects."""
+            log.debug("Client connected, sending initial data")
+            import asyncio as aio
+            try:
+                loop = aio.get_event_loop()
+            except RuntimeError:
+                loop = aio.new_event_loop()
+                aio.set_event_loop(loop)
+            
+            # Send opportunities immediately
+            opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+            payload = [asdict(opp) for opp in opportunities]
+            socketio.emit("opportunities", payload)
+            log.debug("Sent %d initial opportunities to client", len(payload))
+            
+            # Send exchange status immediately
+            if aggregator:
+                try:
+                    statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                    status_payload = {
+                        name: {
+                            "name": status.name,
+                            "connected": status.connected,
+                            "last_update_ms": status.last_update_ms,
+                            "quote_count": status.quote_count,
+                            "error_count": status.error_count,
+                            "last_error": status.last_error,
+                        }
+                        for name, status in statuses.items()
+                    }
+                    socketio.emit("exchange_status", status_payload)
+                    log.debug("Sent initial exchange status to client")
+                except Exception as e:
+                    log.debug("Error sending initial exchange status: %s", e)
 
         def emit_loop() -> None:
             log.info("Starting WebSocket emit loop")
             import asyncio as aio
             loop = aio.new_event_loop()
             aio.set_event_loop(loop)
+            import time
+            first_emit = True
             try:
                 while True:
                     opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
                     payload = [asdict(opp) for opp in opportunities]
                     if payload:
                         log.debug("Emitting %d opportunities via WebSocket", len(payload))
+                    else:
+                        log.debug("Emitting empty opportunities list (no opportunities found yet)")
                     socketio.emit("opportunities", payload)
                     
                     # Emit exchange status if aggregator is available
@@ -224,8 +265,11 @@ def create_app(
                         except Exception as e:
                             log.debug("Error emitting exchange status: %s", e)
                     
-                    import time
-                    time.sleep(1)
+                    # Первая отправка без задержки, затем с интервалом 1 секунда
+                    if not first_emit:
+                        time.sleep(1)
+                    else:
+                        first_emit = False
             except Exception as e:
                 log.exception("Error in emit loop: %s", e)
             finally:
