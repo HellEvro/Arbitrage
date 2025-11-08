@@ -200,6 +200,33 @@ th {
   padding: 0.35rem 0.3rem;
 }
 
+/* Группы монет */
+.symbol-group-header {
+  background-color: #21262d !important;
+  border-top: 2px solid #30363d;
+  border-bottom: 2px solid #30363d;
+}
+
+.symbol-group-header:hover {
+  background-color: #2d333b !important;
+}
+
+.symbol-group-row {
+  background-color: #161b22;
+}
+
+.symbol-group-row:hover {
+  background-color: #1c2128;
+}
+
+.group-toggle-icon {
+  display: inline-block;
+  width: 1rem;
+  text-align: center;
+  color: #58a6ff;
+  transition: transform 0.2s;
+}
+
 tr:hover {
   background-color: #1c2330;
 }

@@ -84,89 +84,88 @@ class ArbitrageEngine:
                 filtered_by_stale += 1
                 continue
 
-            min_exchange, min_price = min(snapshot.prices.items(), key=lambda item: item[1])
-            max_exchange, max_price = max(snapshot.prices.items(), key=lambda item: item[1])
+            # Проверяем ВСЕ возможные пары бирж для этой монеты
+            # Это позволит найти все арбитражные возможности, а не только min/max
+            exchanges_list = list(snapshot.prices.items())
+            
+            for i, (buy_exchange, buy_price) in enumerate(exchanges_list):
+                if buy_price <= 0:
+                    filtered_by_price += 1
+                    continue
+                
+                for j, (sell_exchange, sell_price) in enumerate(exchanges_list):
+                    # Пропускаем одинаковые биржи
+                    if buy_exchange == sell_exchange:
+                        continue
+                    
+                    if sell_price <= 0:
+                        continue
+                    
+                    # Пропускаем если цена продажи не выше цены покупки
+                    if sell_price <= buy_price:
+                        continue
+                    
+                    spread = sell_price - buy_price
+                    spread_pct = (spread / buy_price) * 100.0
 
-            if min_price <= 0 or max_price <= 0:
-                filtered_by_price += 1
-                continue
+                    notional = self._settings.notional_usdt_default
+                    quantity = notional / buy_price
 
-            spread = max_price - min_price
-            spread_pct = (spread / min_price) * 100.0
+                    # Get fees - prefer fee_fetcher, fallback to config, then default
+                    if self._fee_fetcher:
+                        buy_fee_info = await self._fee_fetcher.get_fee(buy_exchange, snapshot.symbol)
+                        sell_fee_info = await self._fee_fetcher.get_fee(sell_exchange, snapshot.symbol)
+                        fee_buy_rate = buy_fee_info.taker
+                        fee_sell_rate = sell_fee_info.taker
+                        buy_fee_pct = fee_buy_rate * 100  # Convert to percentage for display
+                        sell_fee_pct = fee_sell_rate * 100
+                    elif buy_exchange in self._settings.fees:
+                        fee_buy_rate = self._settings.fees[buy_exchange].taker
+                        fee_sell_rate = self._settings.fees[sell_exchange].taker if sell_exchange in self._settings.fees else 0.001
+                        buy_fee_pct = fee_buy_rate * 100
+                        sell_fee_pct = fee_sell_rate * 100
+                    else:
+                        fee_buy_rate = 0.001
+                        fee_sell_rate = 0.001
+                        buy_fee_pct = 0.1
+                        sell_fee_pct = 0.1
 
-            notional = self._settings.notional_usdt_default
-            quantity = notional / min_price
+                    fees_buy = notional * fee_buy_rate
+                    fees_sell = (quantity * sell_price) * fee_sell_rate
+                    total_fees = fees_buy + fees_sell
 
-            # Get fees - prefer fee_fetcher, fallback to config, then default
-            if self._fee_fetcher:
-                buy_fee_info = await self._fee_fetcher.get_fee(min_exchange, snapshot.symbol)
-                sell_fee_info = await self._fee_fetcher.get_fee(max_exchange, snapshot.symbol)
-                fee_buy_rate = buy_fee_info.taker
-                fee_sell_rate = sell_fee_info.taker
-                buy_fee_pct = fee_buy_rate * 100  # Convert to percentage for display
-                sell_fee_pct = fee_sell_rate * 100
-            elif min_exchange in self._settings.fees:
-                fee_buy_rate = self._settings.fees[min_exchange].taker
-                fee_sell_rate = self._settings.fees[max_exchange].taker if max_exchange in self._settings.fees else 0.001
-                buy_fee_pct = fee_buy_rate * 100
-                sell_fee_pct = fee_sell_rate * 100
-            else:
-                fee_buy_rate = 0.001
-                fee_sell_rate = 0.001
-                buy_fee_pct = 0.1
-                sell_fee_pct = 0.1
+                    slippage = self._settings.slippage_bps / 10000.0 * notional
 
-            fees_buy = notional * fee_buy_rate
-            fees_sell = (quantity * max_price) * fee_sell_rate
-            total_fees = fees_buy + fees_sell
+                    gross_profit = (sell_price - buy_price) * quantity
+                    net_profit = gross_profit - total_fees - slippage
 
-            slippage = self._settings.slippage_bps / 10000.0 * notional
+                    # Фильтруем по минимальной прибыли и спреду
+                    if net_profit < self._settings.thresholds.min_profit_usdt:
+                        continue
+                    if spread_pct < self._settings.thresholds.min_spread_pct:
+                        continue
 
-            gross_profit = (max_price - min_price) * quantity
-            net_profit = gross_profit - total_fees - slippage
+                    buy_symbol = snapshot.exchange_symbols.get(buy_exchange, snapshot.symbol)
+                    sell_symbol = snapshot.exchange_symbols.get(sell_exchange, snapshot.symbol)
 
-            # Логируем отфильтрованные возможности для диагностики
-            if net_profit < self._settings.thresholds.min_profit_usdt:
-                log.debug(
-                    "Filtered %s: net_profit %.2f < min_profit %.2f (gross: %.2f, fees: %.2f, slippage: %.2f)",
-                    snapshot.symbol,
-                    net_profit,
-                    self._settings.thresholds.min_profit_usdt,
-                    gross_profit,
-                    total_fees,
-                    slippage,
-                )
-                continue
-            if spread_pct < self._settings.thresholds.min_spread_pct:
-                log.debug(
-                    "Filtered %s: spread_pct %.3f < min_spread %.3f",
-                    snapshot.symbol,
-                    spread_pct,
-                    self._settings.thresholds.min_spread_pct,
-                )
-                continue
-
-            buy_symbol = snapshot.exchange_symbols.get(min_exchange, snapshot.symbol)
-            sell_symbol = snapshot.exchange_symbols.get(max_exchange, snapshot.symbol)
-
-            results.append(
-                ArbitrageOpportunity(
-                    symbol=snapshot.symbol,
-                    buy_exchange=min_exchange,
-                    buy_price=min_price,
-                    buy_symbol=buy_symbol,
-                    buy_fee_pct=buy_fee_pct,
-                    sell_exchange=max_exchange,
-                    sell_price=max_price,
-                    sell_symbol=sell_symbol,
-                    sell_fee_pct=sell_fee_pct,
-                    spread_usdt=net_profit,
-                    spread_pct=spread_pct,
-                    gross_profit_usdt=gross_profit,
-                    total_fees_usdt=total_fees,
-                    timestamp_ms=snapshot.timestamp_ms,
-                )
-            )
+                    results.append(
+                        ArbitrageOpportunity(
+                            symbol=snapshot.symbol,
+                            buy_exchange=buy_exchange,
+                            buy_price=buy_price,
+                            buy_symbol=buy_symbol,
+                            buy_fee_pct=buy_fee_pct,
+                            sell_exchange=sell_exchange,
+                            sell_price=sell_price,
+                            sell_symbol=sell_symbol,
+                            sell_fee_pct=sell_fee_pct,
+                            spread_usdt=net_profit,
+                            spread_pct=spread_pct,
+                            gross_profit_usdt=gross_profit,
+                            total_fees_usdt=total_fees,
+                            timestamp_ms=snapshot.timestamp_ms,
+                        )
+                    )
 
         results.sort(key=lambda item: item.spread_usdt, reverse=True)
         

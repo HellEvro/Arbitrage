@@ -12,6 +12,7 @@ const state = {
   enableBlacklist: localStorage.getItem("arbitrage_enableBlacklist") !== "false",
   enableWhitelist: localStorage.getItem("arbitrage_enableWhitelist") === "true",
   autoSortWhitelist: localStorage.getItem("arbitrage_autoSortWhitelist") !== "false",
+  expandedGroups: JSON.parse(localStorage.getItem("arbitrage_expandedGroups") || "[]"), // Раскрытые группы
 };
 
 console.log("Socket.IO initialized:", socket.connected);
@@ -139,6 +140,21 @@ function limitOpportunities(opportunities) {
   return opportunities.slice(0, numLimit);
 }
 
+function groupOpportunitiesBySymbol(opportunities) {
+  const groups = {};
+  for (const opp of opportunities) {
+    if (!groups[opp.symbol]) {
+      groups[opp.symbol] = [];
+    }
+    groups[opp.symbol].push(opp);
+  }
+  // Сортируем возможности внутри каждой группы по прибыли
+  for (const symbol in groups) {
+    groups[symbol].sort((a, b) => (b.spread_usdt || 0) - (a.spread_usdt || 0));
+  }
+  return groups;
+}
+
 function processOpportunities(opportunities) {
   console.log("Processing opportunities:", opportunities.length, "total");
   
@@ -148,16 +164,39 @@ function processOpportunities(opportunities) {
   processed = sortOpportunities(processed);
   console.log("After sorting:", processed.length);
   
-  processed = limitOpportunities(processed);
-  console.log("After limiting:", processed.length, "limit:", state.limit, "type:", typeof state.limit);
+  // Группируем по символам ПЕРЕД ограничением
+  // Это позволит правильно применять лимит к группам монет, а не к отдельным возможностям
+  let grouped = groupOpportunitiesBySymbol(processed);
+  console.log("Grouped into", Object.keys(grouped).length, "symbol groups");
   
-  return processed;
+  // Применяем лимит к количеству групп (монет), а не к количеству возможностей
+  if (state.limit !== "all") {
+    const limit = state.limit === "custom" 
+      ? parseInt(document.getElementById("custom-limit")?.value || "20", 10)
+      : parseInt(state.limit, 10) || 20;
+    
+    // Сортируем группы по максимальной прибыли и берем топ N
+    const sortedGroups = Object.keys(grouped).sort((a, b) => {
+      const maxA = Math.max(...grouped[a].map(o => o.spread_usdt || 0));
+      const maxB = Math.max(...grouped[b].map(o => o.spread_usdt || 0));
+      return maxB - maxA;
+    });
+    
+    const limitedGroups = {};
+    for (let i = 0; i < Math.min(limit, sortedGroups.length); i++) {
+      limitedGroups[sortedGroups[i]] = grouped[sortedGroups[i]];
+    }
+    grouped = limitedGroups;
+    console.log("After limiting groups:", Object.keys(grouped).length, "limit:", limit);
+  }
+  
+  return grouped;
 }
 
 function renderOpportunities(opportunities) {
   console.log("Rendering opportunities:", opportunities?.length || 0);
   
-    if (!Array.isArray(opportunities) || opportunities.length === 0) {
+  if (!Array.isArray(opportunities) || opportunities.length === 0) {
     console.warn("No opportunities to render:", opportunities);
     if (tableBody) {
       tableBody.innerHTML = "<tr><td colspan='12' style='text-align: center;'>Нет данных</td></tr>";
@@ -172,31 +211,105 @@ function renderOpportunities(opportunities) {
 
   const processed = processOpportunities(opportunities);
   
-  tableBody.innerHTML = processed
-    .map((opp) => {
-      const grossProfit = opp.gross_profit_usdt || 0;
-      const totalFees = opp.total_fees_usdt || 0;
-      const netProfit = opp.spread_usdt || 0;
-      
-      return `
-        <tr>
-          <td><strong>${opp.symbol}</strong></td>
-          <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
-          <td>${formatPrice(opp.buy_price)}</td>
-          <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-          <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
-          <td>${formatPrice(opp.sell_price)}</td>
-          <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-          <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
-          <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
-          <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
-          <td>${opp.spread_pct.toFixed(3)}%</td>
-          <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
-        </tr>
-      `;
-    })
-    .join("");
+  // processed теперь объект с группами по символам
+  const symbols = Object.keys(processed).sort((a, b) => {
+    // Сортируем группы по максимальной прибыли в группе
+    const maxA = Math.max(...processed[a].map(o => o.spread_usdt || 0));
+    const maxB = Math.max(...processed[b].map(o => o.spread_usdt || 0));
+    return maxB - maxA;
+  });
+  
+  let html = "";
+  for (const symbol of symbols) {
+    const opps = processed[symbol];
+    const maxProfit = Math.max(...opps.map(o => o.spread_usdt || 0));
+    const groupId = `group-${symbol}`;
+    const isExpanded = state.expandedGroups?.includes(symbol) ?? true; // По умолчанию раскрыто
+    
+    // Заголовок группы
+    html += `
+      <tr class="symbol-group-header" data-symbol="${symbol}" onclick="toggleGroup('${symbol}')">
+        <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span class="group-toggle-icon" style="font-size: 0.8rem;">${isExpanded ? '▼' : '▶'}</span>
+            <strong style="font-size: 1rem;">${symbol}</strong>
+            <span style="color: #8b949e; font-size: 0.85rem;">
+              (${opps.length} ${opps.length === 1 ? 'возможность' : opps.length < 5 ? 'возможности' : 'возможностей'}, 
+              макс. прибыль: <span class="profit">${maxProfit.toFixed(2)} USDT</span>)
+            </span>
+          </div>
+        </td>
+      </tr>
+    `;
+    
+    // Строки с возможностями (скрыты/показаны в зависимости от состояния)
+    if (isExpanded) {
+      for (const opp of opps) {
+        const grossProfit = opp.gross_profit_usdt || 0;
+        const totalFees = opp.total_fees_usdt || 0;
+        const netProfit = opp.spread_usdt || 0;
+        
+        html += `
+          <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22;">
+            <td style="padding-left: 2rem;">→</td>
+            <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
+            <td>${formatPrice(opp.buy_price)}</td>
+            <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+            <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
+            <td>${formatPrice(opp.sell_price)}</td>
+            <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+            <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
+            <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
+            <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
+            <td>${opp.spread_pct.toFixed(3)}%</td>
+            <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
+          </tr>
+        `;
+      }
+    }
+  }
+  
+  if (html === "") {
+    html = "<tr><td colspan='12' style='text-align: center;'>Нет данных</td></tr>";
+  }
+  
+  tableBody.innerHTML = html;
+  
+  // Обновляем иконки раскрытия после рендеринга
+  updateGroupIcons();
 }
+
+function toggleGroup(symbol) {
+  if (!state.expandedGroups) {
+    state.expandedGroups = [];
+  }
+  const index = state.expandedGroups.indexOf(symbol);
+  if (index === -1) {
+    state.expandedGroups.push(symbol);
+  } else {
+    state.expandedGroups.splice(index, 1);
+  }
+  localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
+  renderOpportunities(state.opportunities);
+}
+
+function updateGroupIcons() {
+  document.querySelectorAll(".symbol-group-header").forEach(header => {
+    const symbol = header.dataset.symbol;
+    const isExpanded = state.expandedGroups?.includes(symbol) ?? true;
+    const icon = header.querySelector(".group-toggle-icon");
+    if (icon) {
+      icon.textContent = isExpanded ? '▼' : '▶';
+    }
+    // Показываем/скрываем строки группы
+    document.querySelectorAll(`tr.symbol-group-row[data-group="${symbol}"]`).forEach(row => {
+      row.style.display = isExpanded ? "" : "none";
+    });
+  });
+}
+
+// Делаем функцию доступной глобально
+window.toggleGroup = toggleGroup;
 
 socket.on("opportunities", (data) => {
   if (state.frozen) {
