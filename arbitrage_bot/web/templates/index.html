@@ -1,33 +1,133 @@
- <!doctype html>
- <html lang="ru">
-   <head>
-     <meta charset="utf-8" />
-     <title>Arbitrage Ranking</title>
-     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
-     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
-   </head>
-   <body>
-     <main>
-       <h1>Arbitrage Opportunities</h1>
-       <table id="ranking-table">
-        <thead>
-          <tr>
-            <th>Монета</th>
-            <th>Биржа min</th>
-            <th>Цена min</th>
-            <th>Комиссия min</th>
-            <th>Биржа max</th>
-            <th>Цена max</th>
-            <th>Комиссия max</th>
-            <th>Разница (USDT)</th>
-            <th>%</th>
-            <th>Обновлено</th>
-          </tr>
-        </thead>
-         <tbody></tbody>
-       </table>
-     </main>
-     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-   </body>
- </html>
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Arbitrage Ranking</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Arbitrage Opportunities</h1>
+      
+      <!-- Панель управления -->
+      <div class="controls-panel">
+        <div class="control-group">
+          <label for="limit-select">Показать:</label>
+          <select id="limit-select">
+            <option value="10">Топ 10</option>
+            <option value="20" selected>Топ 20</option>
+            <option value="50">Топ 50</option>
+            <option value="100">Топ 100</option>
+            <option value="all">Все</option>
+            <option value="custom">Произвольное</option>
+          </select>
+          <input type="number" id="custom-limit" min="1" max="1000" value="20" style="display: none; width: 80px; margin-left: 10px;" />
+        </div>
+        
+        <div class="control-group">
+          <label for="sort-select">Сортировать по:</label>
+          <select id="sort-select">
+            <option value="spread_usdt" selected>Прибыль (USDT)</option>
+            <option value="spread_pct">Прибыль (%)</option>
+            <option value="symbol">Монета</option>
+            <option value="buy_price">Цена покупки</option>
+            <option value="sell_price">Цена продажи</option>
+          </select>
+        </div>
+        
+        <div class="control-group">
+          <button id="freeze-btn" class="btn btn-secondary">⏸ Зафиксировать</button>
+          <span id="freeze-status" class="status-indicator"></span>
+        </div>
+      </div>
 
+      <!-- Табы -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="main">Основная таблица</button>
+        <button class="tab-btn" data-tab="blacklist">Черный список</button>
+        <button class="tab-btn" data-tab="whitelist">Белый список</button>
+        <button class="tab-btn" data-tab="settings">Настройки</button>
+      </div>
+
+      <!-- Контент табов -->
+      <div class="tab-content">
+        <!-- Основная таблица -->
+        <div id="tab-main" class="tab-pane active">
+          <table id="ranking-table">
+            <thead>
+              <tr>
+                <th>Монета</th>
+                <th>Биржа min</th>
+                <th>Цена min</th>
+                <th>Комиссия min</th>
+                <th>Биржа max</th>
+                <th>Цена max</th>
+                <th>Комиссия max</th>
+                <th>Разница (USDT)</th>
+                <th>%</th>
+                <th>Обновлено</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <!-- Черный список -->
+        <div id="tab-blacklist" class="tab-pane">
+          <div class="list-management">
+            <h2>Черный список монет</h2>
+            <p class="help-text">Монеты из этого списка не будут отображаться в основной таблице</p>
+            <div class="add-item-form">
+              <input type="text" id="blacklist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+              <button id="add-blacklist-btn" class="btn btn-primary">Добавить</button>
+            </div>
+            <div id="blacklist-items" class="list-items"></div>
+          </div>
+        </div>
+
+        <!-- Белый список -->
+        <div id="tab-whitelist" class="tab-pane">
+          <div class="list-management">
+            <h2>Белый список монет</h2>
+            <p class="help-text">Монеты из этого списка будут показываться в приоритете вверху таблицы</p>
+            <div class="add-item-form">
+              <input type="text" id="whitelist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+              <button id="add-whitelist-btn" class="btn btn-primary">Добавить</button>
+            </div>
+            <div id="whitelist-items" class="list-items"></div>
+          </div>
+        </div>
+
+        <!-- Настройки -->
+        <div id="tab-settings" class="tab-pane">
+          <div class="settings-panel">
+            <h2>Настройки фильтрации</h2>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="enable-blacklist" checked />
+                Использовать черный список
+              </label>
+            </div>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="enable-whitelist" />
+                Использовать белый список (приоритет)
+              </label>
+            </div>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="auto-sort-whitelist" checked />
+                Автоматически сортировать белый список вверху
+              </label>
+            </div>
+            <div class="setting-item">
+              <button id="clear-all-btn" class="btn btn-danger">Очистить все списки</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>
