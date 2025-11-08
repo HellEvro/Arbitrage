@@ -46,10 +46,14 @@ class MexcAdapter(BaseAdapter):
         for endpoint in endpoints:
             try:
                 self._log.debug("Trying MEXC endpoint: %s", endpoint)
-                data = await self._http.get_json(endpoint, extra_headers=mexc_headers)
+                data = await self._http.get_json(endpoint, extra_headers=mexc_headers, max_retries=1)  # Don't retry on 403
                 break  # Success
             except Exception as e:
                 last_error = e
+                # Check if it's a 403 error - don't retry other endpoints if 403
+                if hasattr(e, 'status') and e.status == 403:
+                    self._log.warning("MEXC endpoint %s returned 403 Forbidden - skipping other endpoints", endpoint)
+                    break  # Don't try other endpoints if 403
                 self._log.debug("Endpoint %s failed: %s", endpoint, e)
                 if endpoint == endpoints[-1]:
                     # Last endpoint failed, try fallback
@@ -59,12 +63,19 @@ class MexcAdapter(BaseAdapter):
         
         if data is None:
             # All endpoints failed, try ticker24hr fallback
+            # But skip if last error was 403 (IP blocked)
+            if last_error and hasattr(last_error, 'status') and last_error.status == 403:
+                self._log.warning("MEXC API returned 403 Forbidden - IP may be blocked. Skipping ticker24hr fallback.")
+                # Return empty list - system will continue with other exchanges
+                return []
+            
             if last_error:
                 self._log.warning("All MEXC endpoints failed, trying ticker24hr fallback: %s", last_error)
             try:
                 tickers = await self._http.get_json(
                     f"{self._REST_BASE}/api/v3/ticker/24hr",
-                    extra_headers=mexc_headers
+                    extra_headers=mexc_headers,
+                    max_retries=1  # Don't retry on 403
                 )
                 markets: list[ExchangeMarket] = []
                 seen_symbols = set()
@@ -128,15 +139,42 @@ class MexcAdapter(BaseAdapter):
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
         }
+        consecutive_403_errors = 0
+        max_403_errors = 3  # After 3 consecutive 403 errors, wait longer
+        
         while not self.closed:
             try:
                 data = await self._http.get_json(
                     f"{self._REST_BASE}/api/v3/ticker/bookTicker",
-                    extra_headers=mexc_headers
+                    extra_headers=mexc_headers,
+                    max_retries=1  # Don't retry on 403
                 )
+                consecutive_403_errors = 0  # Reset counter on success
             except Exception as e:
-                self._log.error("Failed to fetch quotes from MEXC: %s", e)
-                await asyncio.sleep(self._poll_interval)
+                # Check if it's a 403 error
+                is_403 = hasattr(e, 'status') and e.status == 403
+                if is_403:
+                    consecutive_403_errors += 1
+                    if consecutive_403_errors >= max_403_errors:
+                        self._log.warning(
+                            "MEXC returned %d consecutive 403 errors - IP may be blocked. "
+                            "Waiting 60 seconds before retry.",
+                            consecutive_403_errors
+                        )
+                        await asyncio.sleep(60.0)  # Wait 60 seconds before retry
+                        consecutive_403_errors = 0  # Reset after long wait
+                    else:
+                        self._log.warning(
+                            "MEXC returned 403 Forbidden (consecutive: %d/%d). Waiting %d seconds.",
+                            consecutive_403_errors,
+                            max_403_errors,
+                            self._poll_interval * 2
+                        )
+                        await asyncio.sleep(self._poll_interval * 2)  # Wait longer on 403
+                else:
+                    consecutive_403_errors = 0  # Reset on non-403 errors
+                    self._log.error("Failed to fetch quotes from MEXC: %s", e)
+                    await asyncio.sleep(self._poll_interval)
                 continue
             ts = int(time.time() * 1000)
             for item in data:

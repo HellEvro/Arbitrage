@@ -101,17 +101,33 @@ class QuoteAggregator:
                 raise
             except Exception as exc:
                 consecutive_failures += 1
-                log.warning(
-                    "Quote stream failed for %s (failure #%d, received %d quotes): %s. Retrying in %.1f seconds...",
-                    adapter.name,
-                    consecutive_failures,
-                    quote_count,
-                    exc,
-                    retry_delay
-                )
-                # Exponential backoff with max limit
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 1.5, max_retry_delay)
+                # Check if it's a 403 error (IP blocked)
+                is_403 = hasattr(exc, 'status') and exc.status == 403
+                if is_403:
+                    # For 403 errors, wait longer before retry
+                    retry_delay_403 = min(retry_delay * 3, max_retry_delay)
+                    log.warning(
+                        "Quote stream failed for %s with 403 Forbidden (failure #%d, received %d quotes). "
+                        "IP may be blocked. Waiting %.1f seconds before retry...",
+                        adapter.name,
+                        consecutive_failures,
+                        quote_count,
+                        retry_delay_403
+                    )
+                    await asyncio.sleep(retry_delay_403)
+                    retry_delay = min(retry_delay * 1.5, max_retry_delay)
+                else:
+                    log.warning(
+                        "Quote stream failed for %s (failure #%d, received %d quotes): %s. Retrying in %.1f seconds...",
+                        adapter.name,
+                        consecutive_failures,
+                        quote_count,
+                        exc,
+                        retry_delay
+                    )
+                    # Exponential backoff with max limit
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 1.5, max_retry_delay)
 
     def update_markets(self, markets: Sequence[MarketInfo]) -> None:
         self._markets = list(markets)
