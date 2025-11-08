@@ -36,7 +36,22 @@
    text-decoration: none;
  }
 
- a:hover {
-   text-decoration: underline;
- }
+a:hover {
+  text-decoration: underline;
+}
+
+.fee-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  background-color: rgba(100, 100, 100, 0.2);
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-weight: 500;
+  color: #c9d1d9;
+}
+
+.profit {
+  color: #4ade80;
+  font-weight: 600;
+}
 

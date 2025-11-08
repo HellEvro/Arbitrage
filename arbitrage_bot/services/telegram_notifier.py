@@ -6,7 +6,8 @@ import time
 from typing import Sequence
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.utils.token import TokenValidationError
 
 from arbitrage_bot.config.models import Settings
 from arbitrage_bot.core.exceptions import NotificationError
@@ -72,8 +73,8 @@ class TelegramNotifier:
         sell_exchange_cap = opportunity.sell_exchange.capitalize()
         return (
             f"🔔 Арбитраж: {opportunity.symbol}\n"
-            f"Купи на {buy_exchange_cap} по {opportunity.buy_price:.1f} → "
-            f"Продай на {sell_exchange_cap} по {opportunity.sell_price:.1f}\n"
+            f"Купи на {buy_exchange_cap} по {opportunity.buy_price:.1f} (комиссия {opportunity.buy_fee_pct:.3f}%) → "
+            f"Продай на {sell_exchange_cap} по {opportunity.sell_price:.1f} (комиссия {opportunity.sell_fee_pct:.3f}%)\n"
             f"Разница: +{opportunity.spread_usdt:.1f} USDT ({opportunity.spread_pct:.3f}%)"
         )
 
@@ -81,10 +82,14 @@ class TelegramNotifier:
         if self._bot:
             return self._bot
         token = self._settings.telegram.bot_token.strip()
-        if not token:
-            raise NotificationError("bot_token is empty")
-        self._bot = Bot(token=token)
-        return self._bot
+        if not token or token == "<YOUR_TOKEN>":
+            raise NotificationError("bot_token is empty or not configured")
+        try:
+            self._bot = Bot(token=token)
+            return self._bot
+        except TokenValidationError as e:
+            log.warning("Invalid Telegram bot token: %s", e)
+            raise NotificationError(f"Invalid bot token: {e}") from e
 
     def _is_enabled(self) -> bool:
         if self._enabled_override is not None:

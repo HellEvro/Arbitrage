@@ -25,9 +25,11 @@ class ArbitrageOpportunity:
     buy_exchange: str
     buy_price: float
     buy_symbol: str
+    buy_fee_pct: float  # Fee percentage for buy exchange
     sell_exchange: str
     sell_price: float
     sell_symbol: str
+    sell_fee_pct: float  # Fee percentage for sell exchange
     spread_usdt: float
     spread_pct: float
     timestamp_ms: int

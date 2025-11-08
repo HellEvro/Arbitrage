@@ -37,7 +37,7 @@ ENV/
 logs/
 *.log
 
-# Config (keep example)
+# Config files with sensitive data (keep example)
 config/config.yaml
 !config/config.example.yaml
 

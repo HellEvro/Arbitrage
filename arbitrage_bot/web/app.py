@@ -36,19 +36,27 @@ def create_app(
         return jsonify({"status": "ok"})
 
     @app.route("/api/ranking")
-    async def ranking() -> Any:
+    def ranking() -> Any:
         if not arbitrage_engine:
             return jsonify([])
-        opportunities = await arbitrage_engine.get_latest()
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
         payload = [
             {
                 "symbol": opp.symbol,
                 "buy_exchange": opp.buy_exchange,
                 "buy_price": opp.buy_price,
                 "buy_symbol": opp.buy_symbol,
+                "buy_fee_pct": opp.buy_fee_pct,
                 "sell_exchange": opp.sell_exchange,
                 "sell_price": opp.sell_price,
                 "sell_symbol": opp.sell_symbol,
+                "sell_fee_pct": opp.sell_fee_pct,
                 "spread_usdt": opp.spread_usdt,
                 "spread_pct": opp.spread_pct,
                 "timestamp_ms": opp.timestamp_ms,
@@ -62,10 +70,16 @@ def create_app(
         return render_template("index.html")
 
     @app.route("/internal/markets")
-    async def internal_markets() -> Any:
+    def internal_markets() -> Any:
         if not discovery:
             return jsonify([])
-        markets = await discovery.get_cached()
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        markets = loop.run_until_complete(discovery.get_cached())
         payload = [
             {
                 "symbol": market.symbol,
@@ -77,7 +91,7 @@ def create_app(
         return jsonify(payload)
 
     @app.route("/internal/quote", methods=["POST"])
-    async def internal_quote() -> Any:
+    def internal_quote() -> Any:
         if not quote_store:
             return jsonify({"status": "disabled"}), 503
         data = request.get_json(silent=True) or {}
@@ -97,13 +111,19 @@ def create_app(
             ts_value = int(timestamp_ms) if timestamp_ms is not None else None
         except (TypeError, ValueError):
             ts_value = None
-        await quote_store.upsert(
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(quote_store.upsert(
             symbol.upper(),
             exchange.lower(),
             price_value,
             timestamp_ms=ts_value,
             native_symbol=native_symbol,
-        )
+        ))
         return jsonify({"status": "ok"})
 
     @app.route("/internal/telegram/status")
@@ -132,7 +152,9 @@ def create_app(
             try:
                 while True:
                     opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-                    socketio.emit("opportunities", [asdict(opp) for opp in opportunities])
+                    payload = [asdict(opp) for opp in opportunities]
+                    log.debug("Emitting %d opportunities via WebSocket", len(payload))
+                    socketio.emit("opportunities", payload)
                     import time
                     time.sleep(1)
             except Exception as e:

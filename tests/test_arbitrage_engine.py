@@ -40,4 +40,6 @@ async def test_arbitrage_engine_detects_opportunity() -> None:
     assert opportunity.spread_usdt > 0
     assert opportunity.buy_symbol == "BTCUSDT"
     assert opportunity.sell_symbol == "BTCUSDT"
+    assert opportunity.buy_fee_pct >= 0
+    assert opportunity.sell_fee_pct >= 0
 

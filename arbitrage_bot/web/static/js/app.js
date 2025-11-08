@@ -1,6 +1,20 @@
 const socket = io();
 const tableBody = document.querySelector("#ranking-table tbody");
 
+console.log("Socket.IO initialized:", socket.connected);
+
+socket.on("connect", () => {
+  console.log("WebSocket connected");
+});
+
+socket.on("disconnect", () => {
+  console.log("WebSocket disconnected");
+});
+
+socket.on("connect_error", (error) => {
+  console.error("WebSocket connection error:", error);
+});
+
 const tradeUrlResolvers = {
   bybit: (symbol) => `https://www.bybit.com/trade/spot/${symbol}`,
   mexc: (symbol) => `https://www.mexc.com/exchange/${symbol}`,
@@ -16,19 +30,32 @@ function createExchangeLink(exchange, symbol) {
 }
 
 function renderOpportunities(opportunities) {
-  if (!Array.isArray(opportunities)) return;
+  console.log("Rendering opportunities:", opportunities?.length || 0);
+  if (!Array.isArray(opportunities) || opportunities.length === 0) {
+    console.warn("No opportunities to render:", opportunities);
+    if (tableBody) {
+      tableBody.innerHTML = "<tr><td colspan='10' style='text-align: center;'>Нет данных</td></tr>";
+    }
+    return;
+  }
+  if (!tableBody) {
+    console.error("Table body not found!");
+    return;
+  }
   tableBody.innerHTML = opportunities
     .map((opp) => {
       return `
         <tr>
-          <td>${opp.symbol}</td>
+          <td><strong>${opp.symbol}</strong></td>
           <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
           <td>${opp.buy_price.toFixed(4)}</td>
+          <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
           <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
           <td>${opp.sell_price.toFixed(4)}</td>
-          <td>${opp.spread_usdt.toFixed(2)}</td>
-          <td>${opp.spread_pct.toFixed(3)}</td>
-          <td>${opp.timestamp_ms}</td>
+          <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+          <td><strong class="profit">${opp.spread_usdt.toFixed(2)}</strong></td>
+          <td>${opp.spread_pct.toFixed(3)}%</td>
+          <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
         </tr>
       `;
     })
@@ -36,16 +63,25 @@ function renderOpportunities(opportunities) {
 }
 
 socket.on("opportunities", (data) => {
+  console.log("Received opportunities via WebSocket:", data?.length || 0);
   renderOpportunities(data);
 });
 
 async function fetchInitial() {
   try {
+    console.log("Fetching initial data from /api/ranking");
     const response = await fetch("/api/ranking");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
     const data = await response.json();
+    console.log("Initial data received:", data?.length || 0, "opportunities");
     renderOpportunities(data);
   } catch (error) {
     console.error("Failed to load initial data", error);
+    if (tableBody) {
+      tableBody.innerHTML = `<tr><td colspan='10' style='text-align: center; color: red;'>Ошибка загрузки данных: ${error.message}</td></tr>`;
+    }
   }
 }
 

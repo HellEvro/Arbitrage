@@ -46,6 +46,7 @@ class QuoteAggregator:
         log.info("Quote aggregator stopped")
 
     async def _run_adapter(self, adapter: ExchangeAdapter, symbols: Sequence[str]) -> None:
+        quote_count = 0
         try:
             async for quote in adapter.quote_stream(symbols):
                 canonical = self._reverse_map.get((adapter.name, quote.symbol.upper()))
@@ -59,10 +60,14 @@ class QuoteAggregator:
                     timestamp_ms=quote.timestamp_ms,
                     native_symbol=quote.symbol.upper(),
                 )
+                quote_count += 1
+                if quote_count % 100 == 0:
+                    log.debug("Received %d quotes from %s", quote_count, adapter.name)
         except asyncio.CancelledError:
+            log.info("Quote stream cancelled for %s (received %d quotes)", adapter.name, quote_count)
             raise
         except Exception as exc:  # pragma: no cover - network errors
-            log.exception("Quote aggregator failed for %s: %s", adapter.name, exc)
+            log.exception("Quote aggregator failed for %s after %d quotes: %s", adapter.name, quote_count, exc)
             raise AggregationError(str(exc)) from exc
 
     def update_markets(self, markets: Sequence[MarketInfo]) -> None:

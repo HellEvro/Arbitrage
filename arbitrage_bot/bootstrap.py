@@ -11,6 +11,7 @@ from arbitrage_bot.exchanges.kucoin import KucoinAdapter
 from arbitrage_bot.exchanges.mexc import MexcAdapter
 from arbitrage_bot.exchanges.okx import OkxAdapter
 from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
+from arbitrage_bot.services.fee_fetcher import FeeFetcher
 from arbitrage_bot.services.market_discovery import MarketDiscoveryService
 from arbitrage_bot.services.quote_aggregator import QuoteAggregator
 from arbitrage_bot.services.quote_store import QuoteStore
@@ -53,7 +54,12 @@ async def build_app_components(config_path: str | None = None) -> tuple[
     adapters = create_adapters(settings, http_factory)
     discovery = MarketDiscoveryService(adapters)
     quote_store = QuoteStore()
-    arbitrage_engine = ArbitrageEngine(quote_store, settings)
+    
+    # Create fee fetcher for automatic fee retrieval
+    fee_fetcher = FeeFetcher(http_factory)
+    await fee_fetcher.refresh_all(settings.exchanges)
+    
+    arbitrage_engine = ArbitrageEngine(quote_store, settings, fee_fetcher=fee_fetcher)
     notifier = TelegramNotifier(settings)
 
     markets = await discovery.refresh()
