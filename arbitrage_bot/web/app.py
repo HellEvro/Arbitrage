@@ -46,6 +46,7 @@ def create_app(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+        log.debug("API /ranking: got %d opportunities from engine", len(opportunities))
         payload = [
             {
                 "symbol": opp.symbol,
@@ -63,6 +64,7 @@ def create_app(
             }
             for opp in opportunities
         ]
+        log.debug("API /ranking: returning %d opportunities", len(payload))
         return jsonify(payload)
 
     @app.route("/")
@@ -153,7 +155,8 @@ def create_app(
                 while True:
                     opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
                     payload = [asdict(opp) for opp in opportunities]
-                    log.debug("Emitting %d opportunities via WebSocket", len(payload))
+                    if payload:
+                        log.debug("Emitting %d opportunities via WebSocket", len(payload))
                     socketio.emit("opportunities", payload)
                     import time
                     time.sleep(1)
