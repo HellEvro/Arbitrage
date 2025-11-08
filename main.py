@@ -6,8 +6,6 @@ import signal
 import webbrowser
 from typing import Any
 
-import uvicorn
-
 from arbitrage_bot.bootstrap import build_app_components
 from arbitrage_bot.web import create_app
 
@@ -73,33 +71,35 @@ async def main() -> None:
     evaluation_task = asyncio.create_task(evaluation_loop(), name="evaluation-loop")
     discovery_task = asyncio.create_task(discovery_loop(), name="discovery-loop")
 
-    config = uvicorn.Config(
-        socketio.asgi_app,
-        host=settings.web.host,
-        port=settings.web.port,
-        loop="asyncio",
-        lifespan="off",
-        log_config=None,
-    )
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve(), name="uvicorn-server")
+    async def run_flask_server() -> None:
+        def run_socketio() -> None:
+            socketio.run(
+                _app,
+                host=settings.web.host,
+                port=settings.web.port,
+                allow_unsafe_werkzeug=True,
+                use_reloader=False,
+            )
 
-    def _on_server_done(_: asyncio.Future[Any]) -> None:
-        stop_event.set()
+        import threading
+        flask_thread = threading.Thread(target=run_socketio, daemon=True)
+        flask_thread.start()
+        log.info("Web server starting on %s:%d", settings.web.host, settings.web.port)
+        
+        async def open_browser() -> None:
+            await asyncio.sleep(1.5)
+            url = f"http://localhost:{settings.web.port}"
+            log.info("Opening browser at %s", url)
+            webbrowser.open(url)
 
-    server_task.add_done_callback(_on_server_done)
+        asyncio.create_task(open_browser(), name="open-browser")
+        
+        await stop_event.wait()
+        flask_thread.join(timeout=1.0)
 
-    async def open_browser() -> None:
-        await asyncio.sleep(1.5)
-        url = f"http://localhost:{settings.web.port}"
-        log.info("Opening browser at %s", url)
-        webbrowser.open(url)
-
-    asyncio.create_task(open_browser(), name="open-browser")
-    log.info("Web server starting on %s:%d", settings.web.host, settings.web.port)
+    server_task = asyncio.create_task(run_flask_server(), name="flask-server")
 
     await stop_event.wait()
-    server.should_exit = True
 
     evaluation_task.cancel()
     discovery_task.cancel()
@@ -109,10 +109,7 @@ async def main() -> None:
     await asyncio.gather(*(adapter.close() for adapter in adapters), return_exceptions=True)
     await http_factory.close()
 
-    if not server_task.done():
-        await server.shutdown()
-    await asyncio.gather(evaluation_task, discovery_task, return_exceptions=True)
-    await server_task
+    await asyncio.gather(evaluation_task, discovery_task, server_task, return_exceptions=True)
 
 
 if __name__ == "__main__":

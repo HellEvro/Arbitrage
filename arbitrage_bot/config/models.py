@@ -41,7 +41,7 @@ class WebConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     level: str = Field(default="INFO")
-    json: bool = Field(default=False)
+    json_format: bool = Field(default=False, alias="json")
 
 
 class RedisConfig(BaseModel):

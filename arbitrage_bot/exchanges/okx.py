@@ -8,6 +8,11 @@ from arbitrage_bot.exchanges.base import BaseAdapter, ExchangeMarket, ExchangeQu
 
 
 class OkxAdapter(BaseAdapter):
+    """
+    OKX exchange adapter using public REST API endpoints.
+    No authentication required for public market endpoints (tickers, candles, etc.).
+    Public endpoints: /api/v5/public/instruments, /api/v5/market/tickers
+    """
     name = "okx"
     _REST_BASE = "https://www.okx.com"
 

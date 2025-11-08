@@ -26,7 +26,8 @@ def create_app(
 ) -> tuple[Flask, SocketIO]:
     app = Flask(__name__, static_folder="static", template_folder="templates")
     cors = settings.web.cors_origins if settings else ["*"]
-    socketio = SocketIO(app, async_mode="asgi", cors_allowed_origins=cors)
+    # Use threading mode - Flask-SocketIO will handle async operations
+    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=cors, logger=False, engineio_logger=False)
     log.info("Flask app created with SocketIO")
 
     @app.route("/api/status")
@@ -123,12 +124,21 @@ def create_app(
 
     if arbitrage_engine:
 
-        async def emit_loop() -> None:
+        def emit_loop() -> None:
             log.info("Starting WebSocket emit loop")
-            while True:
-                opportunities = await arbitrage_engine.get_latest()
-                socketio.emit("opportunities", [asdict(opp) for opp in opportunities])
-                await asyncio.sleep(1)
+            import asyncio as aio
+            loop = aio.new_event_loop()
+            aio.set_event_loop(loop)
+            try:
+                while True:
+                    opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+                    socketio.emit("opportunities", [asdict(opp) for opp in opportunities])
+                    import time
+                    time.sleep(1)
+            except Exception as e:
+                log.exception("Error in emit loop: %s", e)
+            finally:
+                loop.close()
 
         socketio.start_background_task(emit_loop)
 

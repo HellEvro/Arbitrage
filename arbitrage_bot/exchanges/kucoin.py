@@ -8,6 +8,11 @@ from arbitrage_bot.exchanges.base import BaseAdapter, ExchangeMarket, ExchangeQu
 
 
 class KucoinAdapter(BaseAdapter):
+    """
+    KuCoin exchange adapter using public REST API endpoints.
+    No authentication required for Market Data endpoints (Get All Tickers, Get Ticker, etc.).
+    Public endpoints: /api/v1/symbols, /api/v1/market/allTickers
+    """
     name = "kucoin"
     _REST_BASE = "https://api.kucoin.com"
 

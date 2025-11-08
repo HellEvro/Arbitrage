@@ -8,6 +8,12 @@ from arbitrage_bot.exchanges.base import BaseAdapter, ExchangeMarket, ExchangeQu
 
 
 class BitgetAdapter(BaseAdapter):
+    """
+    Bitget exchange adapter using public REST API endpoints.
+    No authentication required for Public/Market endpoints (tickers, order books, candles).
+    Rate limits: IP-based (e.g., 20 requests/sec for tickers).
+    Public endpoints: /api/spot/v1/public/products, /api/spot/v1/market/tickers
+    """
     name = "bitget"
     _REST_BASE = "https://api.bitget.com"
 

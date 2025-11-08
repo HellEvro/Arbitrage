@@ -53,7 +53,7 @@ def configure_logging(config: LoggingConfig) -> None:
     ]
 
     renderer: structlog.types.Processor
-    if config.json:
+    if config.json_format:
         renderer = structlog.processors.JSONRenderer(sort_keys=True)
     else:
         renderer = structlog.dev.ConsoleRenderer()

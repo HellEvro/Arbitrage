@@ -8,6 +8,11 @@ from arbitrage_bot.exchanges.base import BaseAdapter, ExchangeMarket, ExchangeQu
 
 
 class MexcAdapter(BaseAdapter):
+    """
+    MEXC exchange adapter using public REST API endpoints.
+    No authentication required for Market Data endpoints (ping, time, tickers, candles, etc.).
+    Public endpoints: /api/v3/exchangeInfo, /api/v3/ticker/bookTicker
+    """
     name = "mexc"
     _REST_BASE = "https://api.mexc.com"
 
@@ -17,16 +22,14 @@ class MexcAdapter(BaseAdapter):
     async def fetch_markets(self) -> Sequence[ExchangeMarket]:
         self._log.info("Fetching markets from MEXC")
         data = await self._http.get_json(f"{self._REST_BASE}/api/v3/exchangeInfo")
-        self._log.info("MEXC API response type: %s, keys: %s", type(data).__name__, list(data.keys()) if isinstance(data, dict) else "not a dict")
         symbols = data.get("symbols", [])
-        self._log.info("MEXC symbols count: %d", len(symbols))
-        if symbols and isinstance(symbols, list):
-            self._log.info("First symbol sample: %s", symbols[0])
         markets: list[ExchangeMarket] = []
         for item in symbols:
             status = item.get("status")
             quote_asset = item.get("quoteAsset", "").upper()
-            if status != "TRADING":
+            is_spot_trading = item.get("isSpotTradingAllowed", False)
+            # MEXC uses status "1" for TRADING, and we also check isSpotTradingAllowed
+            if status != "1" or not is_spot_trading:
                 continue
             if quote_asset != "USDT":
                 continue

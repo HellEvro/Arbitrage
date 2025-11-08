@@ -8,6 +8,11 @@ from arbitrage_bot.exchanges.base import BaseAdapter, ExchangeMarket, ExchangeQu
 
 
 class BybitAdapter(BaseAdapter):
+    """
+    Bybit exchange adapter using public REST API endpoints.
+    No authentication required for market data (tickers, order books, trades, candles).
+    Public endpoints: /v5/market/tickers, /v5/market/instruments-info
+    """
     name = "bybit"
     _REST_BASE = "https://api.bybit.com"
 
