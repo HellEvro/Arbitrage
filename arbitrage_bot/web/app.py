@@ -125,20 +125,29 @@ def create_app(
                 
                 # Сохраняем в файл
                 save_filtering_config(filtering_data)
+                log.info("Filtering config saved to file: %s", filtering_data)
                 
                 # Перезагружаем настройки
                 new_settings = load_settings()
+                log.info("Settings reloaded from file")
                 
                 # Обновляем настройки в engine без перезапуска
                 if current_engine:
                     current_engine.reload_settings(new_settings)
+                    log.info("ArbitrageEngine settings updated")
+                else:
+                    log.warning("ArbitrageEngine not available, settings not applied")
                 
                 # Обновляем настройки в app.config для следующего запроса
                 app.config["SETTINGS"] = new_settings
+                app.config["ARBITRAGE_ENGINE"] = current_engine  # Обновляем ссылку на engine с новыми настройками
+                log.info("App config updated with new settings")
                 
-                log.info("Filtering config saved and reloaded")
-                
-                return jsonify({"success": True, "message": "Настройки сохранены и применены"})
+                return jsonify({
+                    "success": True, 
+                    "message": "Настройки сохранены и применены",
+                    "applied": current_engine is not None
+                })
             except Exception as e:
                 log.exception("Error saving filtering config: %s", e)
                 return jsonify({"error": str(e)}), 500

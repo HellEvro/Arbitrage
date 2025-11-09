@@ -39,9 +39,22 @@ class ArbitrageEngine:
     
     def reload_settings(self, new_settings: Settings) -> None:
         """Перезагрузить настройки без перезапуска."""
+        old_settings = self._settings.filtering.model_dump() if self._settings else {}
         self._settings = new_settings
         self._update_filtering_settings()
-        log.info("Filtering settings reloaded from config")
+        new_settings_dict = new_settings.filtering.model_dump()
+        log.info(
+            "Filtering settings reloaded from config. "
+            "Same coin ratio: %.2f -> %.2f, "
+            "Price ratio threshold: %.2f -> %.2f, "
+            "Stable window: %.1f -> %.1f min",
+            old_settings.get("same_coin_ratio", 0),
+            new_settings_dict.get("same_coin_ratio", 0),
+            old_settings.get("price_ratio_threshold", 0),
+            new_settings_dict.get("price_ratio_threshold", 0),
+            old_settings.get("stable_window_minutes", 0),
+            new_settings_dict.get("stable_window_minutes", 0),
+        )
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
         snapshots = await self._quote_store.list()
