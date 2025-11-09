@@ -308,6 +308,7 @@ function formatPrice(price) {
 
 function filterOpportunities(opportunities) {
   let filtered = [...opportunities];
+  const initialCount = filtered.length;
 
   // Применить поиск по символу
   const searchQuery = state.searchQuery?.trim().toUpperCase() || "";
@@ -318,27 +319,48 @@ function filterOpportunities(opportunities) {
       // Ищем в полном символе (например, BTCUSDT) и в отображаемом символе (BTC)
       return symbol.includes(searchQuery) || displaySymbol.includes(searchQuery);
     });
-    console.log("After search filter:", filtered.length, "query:", searchQuery);
+    console.log("[FILTER] After search filter:", filtered.length, "query:", searchQuery);
   }
 
   // Применить черный список
   if (state.enableBlacklist && state.blacklist.length > 0) {
-    filtered = filtered.filter((opp) => !state.blacklist.includes(opp.symbol.toUpperCase()));
+    const beforeBlacklist = filtered.length;
+    const blacklistSet = new Set(state.blacklist.map((s) => s.toUpperCase()));
+    filtered = filtered.filter((opp) => {
+      const symbolUpper = opp.symbol.toUpperCase();
+      const isBlacklisted = blacklistSet.has(symbolUpper);
+      if (isBlacklisted) {
+        console.log("[FILTER] Blacklisted:", symbolUpper);
+      }
+      return !isBlacklisted;
+    });
+    console.log("[FILTER] After blacklist:", filtered.length, "removed:", beforeBlacklist - filtered.length, "blacklist:", state.blacklist);
   }
 
   // Применить белый список
   if (state.enableWhitelist && state.whitelist.length > 0) {
+    const beforeWhitelist = filtered.length;
     const whitelistSet = new Set(state.whitelist.map((s) => s.toUpperCase()));
-    const whitelisted = filtered.filter((opp) => whitelistSet.has(opp.symbol.toUpperCase()));
+    const whitelisted = filtered.filter((opp) => {
+      const symbolUpper = opp.symbol.toUpperCase();
+      const isWhitelisted = whitelistSet.has(symbolUpper);
+      if (isWhitelisted) {
+        console.log("[FILTER] Whitelisted:", symbolUpper);
+      }
+      return isWhitelisted;
+    });
     const others = filtered.filter((opp) => !whitelistSet.has(opp.symbol.toUpperCase()));
     
     if (state.autoSortWhitelist) {
       filtered = [...whitelisted, ...others];
+      console.log("[FILTER] After whitelist (sorted):", filtered.length, "whitelisted:", whitelisted.length, "others:", others.length, "whitelist:", state.whitelist);
     } else {
       filtered = whitelisted.length > 0 ? whitelisted : filtered;
+      console.log("[FILTER] After whitelist (filtered):", filtered.length, "whitelisted:", whitelisted.length, "whitelist:", state.whitelist);
     }
   }
 
+  console.log("[FILTER] Total filtering:", initialCount, "->", filtered.length);
   return filtered;
 }
 
@@ -1228,14 +1250,20 @@ window.removeFromBlacklist = removeFromBlacklist;
 
 document.getElementById("add-blacklist-btn").addEventListener("click", () => {
   const input = document.getElementById("blacklist-input");
-  addToBlacklist(input.value);
-  input.value = "";
+  const symbol = input.value.trim();
+  if (symbol) {
+    addToBlacklist(symbol);
+    input.value = "";
+  }
 });
 
 document.getElementById("blacklist-input").addEventListener("keypress", (e) => {
   if (e.key === "Enter") {
-    addToBlacklist(e.target.value);
-    e.target.value = "";
+    const symbol = e.target.value.trim();
+    if (symbol) {
+      addToBlacklist(symbol);
+      e.target.value = "";
+    }
   }
 });
 
@@ -1284,14 +1312,20 @@ window.removeFromWhitelist = removeFromWhitelist;
 
 document.getElementById("add-whitelist-btn").addEventListener("click", () => {
   const input = document.getElementById("whitelist-input");
-  addToWhitelist(input.value);
-  input.value = "";
+  const symbol = input.value.trim();
+  if (symbol) {
+    addToWhitelist(symbol);
+    input.value = "";
+  }
 });
 
 document.getElementById("whitelist-input").addEventListener("keypress", (e) => {
   if (e.key === "Enter") {
-    addToWhitelist(e.target.value);
-    e.target.value = "";
+    const symbol = e.target.value.trim();
+    if (symbol) {
+      addToWhitelist(symbol);
+      e.target.value = "";
+    }
   }
 });
 
