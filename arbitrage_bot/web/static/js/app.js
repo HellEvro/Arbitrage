@@ -38,8 +38,8 @@ socket.on("connect_error", (error) => {
 const tradeUrlResolvers = {
   bybit: (symbol) => `https://www.bybit.com/ru-RU/trade/spot/${symbol}`,
   mexc: (symbol) => `https://www.mexc.com/ru-RU/exchange/${symbol}`,
-  bitget: (symbol) => `https://www.bitget.com/ru-RU/spot/${symbol}`,
-  okx: (symbol) => `https://www.okx.com/ru-RU/trade-spot/${symbol}`,
+  bitget: (symbol) => `https://www.bitget.com/spot/${symbol}`,
+  okx: (symbol) => `https://www.okx.com/ru/trade-spot/${symbol.toLowerCase()}`,
   kucoin: (symbol) => `https://www.kucoin.com/trade/${symbol}`,
 };
 
@@ -151,7 +151,7 @@ function createExchangeLink(exchange, symbol) {
       urlSymbol = urlSymbol.replace("-", "_");
     } else if (exchangeLower === "bitget") {
       // Bitget использует формат без разделителя "ACEUSDT"
-      urlSymbol = urlSymbol.replace("-", "");
+      urlSymbol = urlSymbol.replace("-", ""); // Убираем дефис
     }
   } else if (urlSymbol.endsWith("USDT")) {
     // Символ без дефиса (например "ACEUSDT") - преобразуем согласно формату биржи
@@ -166,7 +166,13 @@ function createExchangeLink(exchange, symbol) {
         urlSymbol = `${base}_${quote}`;
         break;
       case "bitget":
-        urlSymbol = urlSymbol; // Bitget использует формат без разделителя
+        // Bitget использует формат без разделителя "ZKUSDT" или "ZKSYNCUSDT"
+        // Если это ZKSYNCUSDT, оставляем как есть (это правильный токен для ZKSync)
+        // Если это ZKUSDT, преобразуем в ZKSYNCUSDT (правильный токен)
+        if (urlSymbol === "ZKUSDT") {
+          urlSymbol = "ZKSYNCUSDT"; // ZKUSDT на Bitget - это неправильный токен, используем ZKSYNCUSDT
+        }
+        // Оставляем как есть (без разделителя)
         break;
       case "okx":
         urlSymbol = `${base}-${quote}`;

@@ -35,14 +35,26 @@ class BitgetAdapter(BaseAdapter):
                 symbol = item.get("symbol", "")
                 if not symbol:
                     continue
-                # Bitget markets API returns symbols with _SPBL suffix, but ticker API returns without suffix
-                # Remove suffix for consistency - ticker API format will be used
+                # Bitget products with _SPBL suffix are NOT spot products (they're margin/futures/etc)
+                # Skip them entirely - they don't exist on spot trading
                 if symbol.endswith("_SPBL"):
-                    symbol = symbol[:-5]  # Remove "_SPBL"
+                    continue
+                
+                base_coin = item.get("baseCoin", "").upper()
+                
+                # КРИТИЧНО: На Bitget есть два разных ZK токена:
+                # - ZKUSDT (0.07139) - это НЕ ZKSync
+                # - ZKSYNCUSDT (0.05508) - это ZKSync (правильный токен)
+                # Для canonical symbol "ZKUSDT" нужно использовать "ZKSYNCUSDT" на Bitget
+                # Это специальный случай маппинга
+                if base_coin == "ZK" and symbol.upper() == "ZKUSDT":
+                    # Пропускаем ZKUSDT, используем только ZKSYNCUSDT для ZK
+                    continue
+                
                 markets.append(
                     ExchangeMarket(
                         symbol=symbol.upper(),
-                        base_asset=item.get("baseCoin", "").upper(),
+                        base_asset=base_coin,
                         quote_asset="USDT",
                     )
                 )

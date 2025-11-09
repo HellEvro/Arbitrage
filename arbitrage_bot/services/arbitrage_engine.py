@@ -63,6 +63,10 @@ class ArbitrageEngine:
         
         Requires at least 2 exchanges per symbol for arbitrage.
         System continues working even if some exchanges are unavailable.
+        
+        Также группирует монеты с одинаковым корнем и сравнивает цены:
+        - Если цены близкие - это одна монета с разными названиями
+        - Если цены сильно различаются - это разные монеты
         """
         results: list[ArbitrageOpportunity] = []
         now_ms = int(time.time() * 1000)
@@ -73,8 +77,178 @@ class ArbitrageEngine:
         filtered_by_exchanges = 0
         filtered_by_stale = 0
         filtered_by_price = 0
-
+        
+        # Функция для извлечения базового корня из base_asset
+        def extract_base_root(base_asset: str | None) -> str:
+            """Извлекает базовый корень, убирая известные суффиксы."""
+            if not base_asset:
+                return ""
+            base = base_asset.upper()
+            # Известные суффиксы
+            known_suffixes = ["SYNC", "WASM", "V2", "V3", "VIRTUAL", "2", "3", "L", "C"]
+            known_suffixes.sort(key=len, reverse=True)
+            for suffix in known_suffixes:
+                if base.endswith(suffix):
+                    root = base[:-len(suffix)]
+                    if len(root) >= 2:
+                        return root
+            return base
+        
+        # Функция для поиска наибольшего общего префикса
+        def longest_common_prefix(str1: str, str2: str) -> str:
+            min_len = min(len(str1), len(str2))
+            for i in range(min_len):
+                if str1[i] != str2[i]:
+                    return str1[:i]
+            return str1[:min_len]
+        
+        # Группируем snapshots по базовому корню для сравнения цен
+        # Структура: {base_root: [snapshots]}
+        root_groups: dict[str, list[QuoteSnapshot]] = {}
         for snapshot in snapshot_list:
+            base_asset = snapshot.base_asset
+            if not base_asset:
+                # Если base_asset нет, пытаемся извлечь из symbol
+                if snapshot.symbol.endswith("USDT"):
+                    base_asset = snapshot.symbol[:-4]
+                else:
+                    continue
+            
+            base_root = extract_base_root(base_asset)
+            if base_root not in root_groups:
+                root_groups[base_root] = []
+            root_groups[base_root].append(snapshot)
+        
+        # Для каждой группы корня проверяем цены и объединяем/разделяем
+        processed_snapshots: list[QuoteSnapshot] = []
+        # Пороги для определения одной монеты vs разных монет:
+        # - Если разница в ценах < 5% (ratio < 1.05) - это точно одна монета (арбитражные погрешности)
+        #   КРИТИЧНО: Для идентичных названий на разных биржах - это могут быть разные монеты!
+        #   Поэтому используем очень строгий порог 5% (например, RWA на MEXC и RWA на KuCoin - разные монеты)
+        # - Если разница в ценах < 50% (ratio < 1.5) - это скорее всего одна монета (только для разных длин названий)
+        # - Если разница в ценах >= 1.5x (ratio >= 1.5) - это точно разные монеты (для идентичных названий)
+        SAME_COIN_RATIO = 1.10  # Разница до 5% - это одна монета (очень строгий порог для идентичных названий)
+        LIKELY_SAME_COIN_RATIO = 1.5  # Разница до 50% - скорее всего одна монета (только для разных длин названий)
+        DIFFERENT_COIN_RATIO = 1.5  # Разница >= 1.5x - точно разные монеты (для идентичных названий)
+        
+        for base_root, group_snapshots in root_groups.items():
+            if len(group_snapshots) == 1:
+                # Только один snapshot с этим корнем - обрабатываем как обычно
+                processed_snapshots.extend(group_snapshots)
+                continue
+            
+            # Несколько snapshots с одним корнем - сравниваем цены
+            # Вычисляем среднюю цену для каждого snapshot
+            snapshot_avg_prices: dict[str, float] = {}
+            for snapshot in group_snapshots:
+                prices = [p for p in snapshot.prices.values() if p > 0]
+                if prices:
+                    snapshot_avg_prices[snapshot.symbol] = sum(prices) / len(prices)
+            
+            if not snapshot_avg_prices:
+                # Нет цен - обрабатываем все отдельно
+                processed_snapshots.extend(group_snapshots)
+                continue
+            
+            # Группируем snapshots по ценовым диапазонам
+            # Применяем разные пороги в зависимости от того, идентичны ли названия или только корень
+            price_groups: list[list[QuoteSnapshot]] = []
+            used_symbols: set[str] = set()
+            
+            # Функция для извлечения base_asset из symbol
+            def get_base_from_symbol(symbol: str) -> str:
+                if symbol.endswith("USDT"):
+                    return symbol[:-4].upper()
+                return symbol.upper()
+            
+            for snapshot in group_snapshots:
+                if snapshot.symbol in used_symbols:
+                    continue
+                
+                avg_price = snapshot_avg_prices.get(snapshot.symbol, 0)
+                if avg_price == 0:
+                    processed_snapshots.append(snapshot)
+                    used_symbols.add(snapshot.symbol)
+                    continue
+                
+                snapshot_base = snapshot.base_asset or get_base_from_symbol(snapshot.symbol)
+                snapshot_base_len = len(snapshot_base)
+                
+                # Ищем другие snapshots с близкими ценами
+                price_group = [snapshot]
+                used_symbols.add(snapshot.symbol)
+                
+                for other_snapshot in group_snapshots:
+                    if other_snapshot.symbol in used_symbols:
+                        continue
+                    
+                    other_avg_price = snapshot_avg_prices.get(other_snapshot.symbol, 0)
+                    if other_avg_price == 0:
+                        continue
+                    
+                    other_base = other_snapshot.base_asset or get_base_from_symbol(other_snapshot.symbol)
+                    other_base_len = len(other_base)
+                    
+                    # Вычисляем ratio
+                    price_ratio = max(avg_price, other_avg_price) / min(avg_price, other_avg_price) if min(avg_price, other_avg_price) > 0 else float('inf')
+                    
+                    # Определяем порог в зависимости от того, идентичны ли названия
+                    if snapshot_base == other_base:
+                        # Названия идентичны - НО это могут быть разные монеты на разных биржах!
+                        # КРИТИЧНО: Если canonical symbols разные (snapshot.symbol != other_snapshot.symbol),
+                        # значит market_discovery уже разделил их как разные монеты - НЕ объединяем!
+                        # Если canonical symbols одинаковые, значит это одна монета с разными ценами на биржах
+                        if snapshot.symbol != other_snapshot.symbol:
+                            # Разные canonical symbols - это разные монеты, не объединяем
+                            continue
+                        # Одинаковые canonical symbols - это одна монета, но раздвижка может быть большой
+                        # Используем стандартный порог для арбитражных возможностей
+                        threshold = LIKELY_SAME_COIN_RATIO  # 1.5 - раздвижка может быть большой для арбитража
+                    elif snapshot_base_len == other_base_len:
+                        # Одинаковая длина, но разные символы - проверяем внимательнее
+                        # Может быть одна монета с небольшими вариациями названия
+                        threshold = LIKELY_SAME_COIN_RATIO  # 1.5
+                    else:
+                        # Разная длина названия, но одинаковый корень
+                        # Используем мягкий порог арбитражных погрешностей
+                        threshold = LIKELY_SAME_COIN_RATIO  # 1.5 - арбитражные погрешности
+                    
+                    # Если цены близкие в пределах порога - это одна монета, объединяем
+                    if price_ratio < threshold:
+                        price_group.append(other_snapshot)
+                        used_symbols.add(other_snapshot.symbol)
+                
+                price_groups.append(price_group)
+            
+            # Обрабатываем каждую группу
+            for price_group in price_groups:
+                if len(price_group) == 1:
+                    # Один snapshot - обрабатываем как обычно
+                    processed_snapshots.append(price_group[0])
+                else:
+                    # Несколько snapshots с близкими ценами - это одна монета
+                    # Используем первый snapshot как основной и добавляем цены из других
+                    main_snapshot = price_group[0]
+                    # Объединяем цены из всех snapshots в группе
+                    merged_snapshot = QuoteSnapshot(
+                        symbol=main_snapshot.symbol,
+                        prices=dict(main_snapshot.prices),
+                        exchange_symbols=dict(main_snapshot.exchange_symbols),
+                        timestamp_ms=max(s.timestamp_ms for s in price_group),
+                        base_asset=main_snapshot.base_asset,
+                        quote_asset=main_snapshot.quote_asset,
+                    )
+                    # Добавляем цены из других snapshots
+                    for other_snapshot in price_group[1:]:
+                        for exchange, price in other_snapshot.prices.items():
+                            if exchange not in merged_snapshot.prices:
+                                merged_snapshot.prices[exchange] = price
+                                merged_snapshot.exchange_symbols[exchange] = other_snapshot.exchange_symbols.get(exchange, other_snapshot.symbol)
+                    
+                    processed_snapshots.append(merged_snapshot)
+
+        # Теперь обрабатываем объединенные snapshots
+        for snapshot in processed_snapshots:
             # Minimum 2 exchanges required for arbitrage
             if len(snapshot.prices) < 2:
                 filtered_by_exchanges += 1
@@ -87,6 +261,37 @@ class ArbitrageEngine:
             # Проверяем ВСЕ возможные пары бирж для этой монеты
             # Это позволит найти все арбитражные возможности, а не только min/max
             exchanges_list = list(snapshot.prices.items())
+            
+            # Определяем диапазон цен для этого символа на всех биржах
+            all_prices = [price for _, price in exchanges_list if price > 0]
+            if len(all_prices) < 2:
+                filtered_by_exchanges += 1
+                continue
+            
+            min_price_all = min(all_prices)
+            max_price_all = max(all_prices)
+            # Проверяем, не являются ли это разные монеты (слишком большая разница в ценах)
+            MIN_PRICE_THRESHOLD = 1e-6  # Цены меньше этого считаем практически нулевыми
+            PRICE_RATIO_THRESHOLD = 1.5  # Если цена в 1.5+ раза больше - это разные монеты (строгий порог)
+            
+            # Если одна цена очень маленькая, а другая нормальная - это разные монеты
+            has_near_zero = min_price_all < MIN_PRICE_THRESHOLD and max_price_all >= MIN_PRICE_THRESHOLD
+            # Если цены слишком сильно различаются - это разные монеты
+            price_ratio_all = max_price_all / min_price_all if min_price_all > 0 else float('inf')
+            
+            # КРИТИЧНО: Если общий диапазон цен для символа слишком большой - это разные монеты
+            # Пропускаем весь символ, не создавая никаких возможностей
+            if has_near_zero or price_ratio_all > PRICE_RATIO_THRESHOLD:
+                filtered_by_price += len(exchanges_list) * (len(exchanges_list) - 1)  # Примерная оценка отфильтрованных пар
+                log.debug(
+                    "Skipping symbol %s entirely: price range %.8f - %.8f (ratio=%.2f, has_near_zero=%s) - different coins",
+                    snapshot.symbol,
+                    min_price_all,
+                    max_price_all,
+                    price_ratio_all,
+                    has_near_zero,
+                )
+                continue
             
             for i, (buy_exchange, buy_price) in enumerate(exchanges_list):
                 if buy_price <= 0:
@@ -103,6 +308,34 @@ class ArbitrageEngine:
                     
                     # Пропускаем если цена продажи не выше цены покупки
                     if sell_price <= buy_price:
+                        continue
+                    
+                    # КРИТИЧНО: Если цены слишком сильно различаются - это разные монеты, пропускаем
+                    # Это предотвращает создание арбитражных возможностей между разными проектами
+                    pair_price_ratio = sell_price / buy_price if buy_price > 0 else float('inf')
+                    buy_is_near_zero = buy_price < MIN_PRICE_THRESHOLD
+                    sell_is_near_zero = sell_price < MIN_PRICE_THRESHOLD
+                    
+                    # Если одна цена очень маленькая, а другая нормальная - это разные монеты
+                    if (buy_is_near_zero and not sell_is_near_zero) or (not buy_is_near_zero and sell_is_near_zero):
+                        filtered_by_price += 1
+                        continue
+                    
+                    # Если цена в 1.5+ раза больше - это разные монеты (строгая фильтрация)
+                    # Это предотвращает арбитраж между разными проектами с одинаковыми названиями
+                    # Порог 1.5x выбран для максимальной строгости - даже небольшие различия могут указывать на разные монеты
+                    if pair_price_ratio > PRICE_RATIO_THRESHOLD:
+                        filtered_by_price += 1
+                        log.debug(
+                            "Filtered opportunity %s: %s@%.8f -> %s@%.8f (ratio=%.2f > %.2f, different coins)",
+                            snapshot.symbol,
+                            buy_exchange,
+                            buy_price,
+                            sell_exchange,
+                            sell_price,
+                            pair_price_ratio,
+                            PRICE_RATIO_THRESHOLD,
+                        )
                         continue
                     
                     spread = sell_price - buy_price
