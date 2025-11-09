@@ -940,6 +940,9 @@ function renderOpportunities(opportunities) {
       ? state.allGroupsExpandedMode 
       : (state.expandedGroups?.includes(symbol) ?? true); // По умолчанию раскрыто
     
+    // Проверяем, есть ли хотя бы одна стабильная возможность в группе
+    const hasStableOpp = opps.some(opp => opp.is_stable || false);
+    
     // Заголовок группы
       const displaySymbol = formatGroupKey(symbol); // Форматируем название группы
     html += `
@@ -947,7 +950,7 @@ function renderOpportunities(opportunities) {
         <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
             <span class="group-toggle-icon" style="font-size: 0.9rem;">${isExpanded ? '▼' : '▶'}</span>
-            <strong style="font-size: 1.1rem;">${displaySymbol}</strong>
+            <strong style="font-size: 1.1rem;">${displaySymbol}${hasStableOpp ? ' <span class="stable-badge" title="В группе есть стабильные арбитражные возможности (существуют непрерывно в течение 5+ минут)">⭐</span>' : ''}</strong>
             <span style="color: #8b949e; font-size: 0.9rem;">
               (${opps.length} ${opps.length === 1 ? 'возможность' : opps.length < 5 ? 'возможности' : 'возможностей'}, 
               макс. прибыль: <span class="profit">${maxProfit.toFixed(2)} USDT</span>)
