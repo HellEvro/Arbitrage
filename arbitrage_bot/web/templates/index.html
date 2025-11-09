@@ -96,8 +96,81 @@
 
         <!-- Настройки -->
         <div id="tab-settings" class="tab-pane">
+          <!-- Параметры фильтрации -->
           <div class="settings-panel">
-            <h2>Настройки фильтрации</h2>
+            <h2>Параметры фильтрации монет</h2>
+            <p class="help-text" style="margin-bottom: 1rem; color: #666;">
+              Эти параметры управляют тем, как система определяет одинаковые и разные монеты на разных биржах.
+              Изменения требуют перезапуска сервера (настройки в config.yaml).
+            </p>
+            
+            <div class="filtering-config-grid">
+              <div class="config-section">
+                <h3>Backend (серверная фильтрация)</h3>
+                
+                <div class="config-item">
+                  <label for="same-coin-ratio">Same Coin Ratio:</label>
+                  <input type="number" id="same-coin-ratio" step="0.01" min="1.0" readonly />
+                  <span class="config-description">Разница до N% - это одна монета (для идентичных названий)</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="likely-same-coin-ratio">Likely Same Coin Ratio:</label>
+                  <input type="number" id="likely-same-coin-ratio" step="0.01" min="1.0" readonly />
+                  <span class="config-description">Разница до N% - скорее всего одна монета (для разных длин названий)</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="different-coin-ratio">Different Coin Ratio:</label>
+                  <input type="number" id="different-coin-ratio" step="0.01" min="1.0" readonly />
+                  <span class="config-description">Разница >= N - точно разные монеты</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="min-price-threshold">Min Price Threshold:</label>
+                  <input type="number" id="min-price-threshold" step="1e-7" min="0" readonly />
+                  <span class="config-description">Цены меньше этого считаем практически нулевыми</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="price-ratio-threshold">Price Ratio Threshold:</label>
+                  <input type="number" id="price-ratio-threshold" step="0.1" min="1.0" readonly />
+                  <span class="config-description">Если цена в N раз больше - это разные монеты</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="stable-window-minutes">Stable Window (минуты):</label>
+                  <input type="number" id="stable-window-minutes" step="0.1" min="0" readonly />
+                  <span class="config-description">Окно стабильности для пометки стабильных арбитражей</span>
+                </div>
+              </div>
+              
+              <div class="config-section">
+                <h3>Frontend (группировка на странице)</h3>
+                
+                <div class="config-item">
+                  <label for="price-diff-suspicious">Price Diff Suspicious:</label>
+                  <input type="number" id="price-diff-suspicious" step="0.1" min="0" readonly />
+                  <span class="config-description">N% - подозрительная разница</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="price-diff-threshold">Price Diff Threshold:</label>
+                  <input type="number" id="price-diff-threshold" step="0.1" min="0" readonly />
+                  <span class="config-description">N% (в 2 раза) - точно разные монеты</span>
+                </div>
+                
+                <div class="config-item">
+                  <label for="price-diff-aggressive">Price Diff Aggressive:</label>
+                  <input type="number" id="price-diff-aggressive" step="0.1" min="0" readonly />
+                  <span class="config-description">N% (в 3 раза) - агрессивное разделение</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="settings-panel" style="margin-top: 2rem;">
+            <h2>Настройки отображения</h2>
             <div class="setting-item">
               <label>
                 <input type="checkbox" id="enable-blacklist" checked />

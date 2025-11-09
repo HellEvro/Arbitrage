@@ -89,6 +89,25 @@ def create_app(
         log.debug("API /ranking: returning %d opportunities", len(payload))
         return jsonify(payload)
 
+    @app.route("/api/filtering-config")
+    def filtering_config() -> Any:
+        """Get filtering configuration for frontend."""
+        if not settings:
+            return jsonify({})
+        return jsonify({
+            # Backend параметры
+            "same_coin_ratio": settings.filtering.same_coin_ratio,
+            "likely_same_coin_ratio": settings.filtering.likely_same_coin_ratio,
+            "different_coin_ratio": settings.filtering.different_coin_ratio,
+            "min_price_threshold": settings.filtering.min_price_threshold,
+            "price_ratio_threshold": settings.filtering.price_ratio_threshold,
+            "stable_window_minutes": settings.filtering.stable_window_minutes,
+            # Frontend параметры
+            "price_diff_suspicious": settings.filtering.price_diff_suspicious,
+            "price_diff_threshold": settings.filtering.price_diff_threshold,
+            "price_diff_aggressive": settings.filtering.price_diff_aggressive,
+        })
+
     @app.route("/api/exchange-status")
     def exchange_status() -> Any:
         """Get status of all exchanges."""

@@ -25,10 +25,28 @@
 
  slippage_bps: 3
 
- thresholds:
-   min_profit_usdt: 0.5
-   min_spread_pct: 0.05
-   stale_ms: 1500
+thresholds:
+  min_profit_usdt: 0.5
+  min_spread_pct: 0.05
+  stale_ms: 1500
+
+filtering:
+  # Пороги для определения одной монеты vs разных монет (backend)
+  same_coin_ratio: 1.10  # Разница до 10% - это одна монета (для идентичных названий)
+  likely_same_coin_ratio: 1.5  # Разница до 50% - скорее всего одна монета (для разных длин названий)
+  different_coin_ratio: 1.5  # Разница >= 1.5x - точно разные монеты
+  
+  # Пороги для фильтрации арбитражных возможностей (backend)
+  min_price_threshold: 1e-6  # Цены меньше этого считаем практически нулевыми
+  price_ratio_threshold: 1.5  # Если цена в N раз больше - это разные монеты
+  
+  # Окно стабильности (backend)
+  stable_window_minutes: 5.0  # Окно стабильности в минутах для пометки стабильных арбитражей
+  
+  # Пороги для группировки на фронтенде
+  price_diff_suspicious: 0.3  # 30% - подозрительная разница
+  price_diff_threshold: 1.0  # 100% (в 2 раза) - точно разные монеты
+  price_diff_aggressive: 2.0  # 200% (в 3 раза) - агрессивное разделение
 
  telegram:
    enabled: true

@@ -17,9 +17,70 @@ const state = {
   allGroupsExpandedMode: localStorage.getItem("arbitrage_allGroupsExpandedMode") === "true", // Режим: все раскрыты (true) или все закрыты (false)
   hasReceivedData: false, // Получены ли данные хотя бы раз
   exchangeStatuses: {}, // Статусы бирж
+  filteringConfig: { // Настройки фильтрации (загружаются с сервера)
+    min_price_threshold: 1e-6,
+    price_diff_suspicious: 0.3,
+    price_diff_threshold: 1.0,
+    price_diff_aggressive: 2.0,
+  },
 };
 
 console.log("Socket.IO initialized:", socket.connected);
+
+// Загружаем настройки фильтрации с сервера
+async function loadFilteringConfig() {
+  try {
+    const response = await fetch("/api/filtering-config");
+    if (response.ok) {
+      const config = await response.json();
+      state.filteringConfig = { ...state.filteringConfig, ...config };
+      console.log("Filtering config loaded:", state.filteringConfig);
+      // Заполняем поля на странице настроек
+      updateFilteringConfigUI();
+    } else {
+      console.warn("Failed to load filtering config, using defaults");
+    }
+  } catch (error) {
+    console.error("Error loading filtering config:", error);
+  }
+}
+
+// Обновляем UI с настройками фильтрации
+function updateFilteringConfigUI() {
+  const cfg = state.filteringConfig;
+  
+  // Backend параметры
+  const sameCoinRatioInput = document.getElementById("same-coin-ratio");
+  if (sameCoinRatioInput) sameCoinRatioInput.value = cfg.same_coin_ratio || 1.10;
+  
+  const likelySameCoinRatioInput = document.getElementById("likely-same-coin-ratio");
+  if (likelySameCoinRatioInput) likelySameCoinRatioInput.value = cfg.likely_same_coin_ratio || 1.5;
+  
+  const differentCoinRatioInput = document.getElementById("different-coin-ratio");
+  if (differentCoinRatioInput) differentCoinRatioInput.value = cfg.different_coin_ratio || 1.5;
+  
+  const minPriceThresholdInput = document.getElementById("min-price-threshold");
+  if (minPriceThresholdInput) minPriceThresholdInput.value = cfg.min_price_threshold || 1e-6;
+  
+  const priceRatioThresholdInput = document.getElementById("price-ratio-threshold");
+  if (priceRatioThresholdInput) priceRatioThresholdInput.value = cfg.price_ratio_threshold || 1.5;
+  
+  const stableWindowMinutesInput = document.getElementById("stable-window-minutes");
+  if (stableWindowMinutesInput) stableWindowMinutesInput.value = cfg.stable_window_minutes || 5.0;
+  
+  // Frontend параметры
+  const priceDiffSuspiciousInput = document.getElementById("price-diff-suspicious");
+  if (priceDiffSuspiciousInput) priceDiffSuspiciousInput.value = cfg.price_diff_suspicious || 0.3;
+  
+  const priceDiffThresholdInput = document.getElementById("price-diff-threshold");
+  if (priceDiffThresholdInput) priceDiffThresholdInput.value = cfg.price_diff_threshold || 1.0;
+  
+  const priceDiffAggressiveInput = document.getElementById("price-diff-aggressive");
+  if (priceDiffAggressiveInput) priceDiffAggressiveInput.value = cfg.price_diff_aggressive || 2.0;
+}
+
+// Загружаем настройки при инициализации
+loadFilteringConfig();
 
 socket.on("connect", () => {
   console.log("WebSocket connected");
@@ -300,13 +361,10 @@ function limitOpportunities(opportunities) {
 }
 
 function groupOpportunitiesBySymbol(opportunities) {
-  // Пороги для определения разных монет:
-  // - Если разница в ценах > 30% - подозрительно, проверяем дальше
-  // - Если разница в ценах > 100% (в 2 раза) - точно разные монеты
-  // - Если разница в ценах > 200% (в 3 раза) - точно разные монеты, агрессивное разделение
-  const PRICE_DIFF_SUSPICIOUS = 0.3; // 30% - подозрительная разница
-  const PRICE_DIFF_THRESHOLD = 1.0; // 100% (в 2 раза) - точно разные монеты
-  const PRICE_DIFF_AGGRESSIVE = 2.0; // 200% (в 3 раза) - агрессивное разделение
+  // Пороги для определения разных монет (из настроек с сервера):
+  const PRICE_DIFF_SUSPICIOUS = state.filteringConfig.price_diff_suspicious || 0.3;
+  const PRICE_DIFF_THRESHOLD = state.filteringConfig.price_diff_threshold || 1.0;
+  const PRICE_DIFF_AGGRESSIVE = state.filteringConfig.price_diff_aggressive || 2.0;
   
   // Извлекаем базовый символ (без разделителей и USDT)
   const normalizeSymbol = (sym) => {
@@ -351,8 +409,8 @@ function groupOpportunitiesBySymbol(opportunities) {
     // Также вычисляем кратность (во сколько раз максимальная цена больше минимальной)
     // Если minPrice = 0, но maxPrice > 0 - это точно разные монеты (Infinity)
     // Если обе цены > 0, вычисляем отношение
-    // Также считаем очень маленькие цены (< 1e-6) как практически нулевые
-    const MIN_PRICE_THRESHOLD = 1e-6; // Цены меньше этого считаем практически нулевыми
+    // Также считаем очень маленькие цены как практически нулевые (из настроек)
+    const MIN_PRICE_THRESHOLD = state.filteringConfig.min_price_threshold || 1e-6;
     let priceRatio = 1;
     const hasNearZeroPrice = minPrice < MIN_PRICE_THRESHOLD && maxPrice >= MIN_PRICE_THRESHOLD;
     if (minPrice === 0 && maxPrice > 0) {
@@ -986,6 +1044,11 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     
     btn.classList.add("active");
     document.getElementById(`tab-${tabName}`).classList.add("active");
+    
+    // Если переключились на вкладку настроек, обновляем значения фильтрации
+    if (tabName === "settings") {
+      updateFilteringConfigUI();
+    }
   });
 });
 

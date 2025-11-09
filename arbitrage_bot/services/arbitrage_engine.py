@@ -21,7 +21,6 @@ class ArbitrageEngine:
         settings: Settings, 
         fee_fetcher: FeeFetcher | None = None,
         top_n: int = 1000,  # Большое значение по умолчанию - фильтрация на клиенте
-        stable_window_minutes: float = 5.0  # Окно стабильности в минутах
     ) -> None:
         self._quote_store = quote_store
         self._settings = settings
@@ -31,7 +30,8 @@ class ArbitrageEngine:
         self._latest: list[ArbitrageOpportunity] = []
         # История стабильности: ключ = (symbol, buy_exchange, sell_exchange), значение = deque с временными метками
         self._stability_history: dict[tuple[str, str, str], deque[int]] = {}
-        self._stable_window_ms = int(stable_window_minutes * 60 * 1000)  # 5 минут в миллисекундах
+        # Используем настройки из конфига
+        self._stable_window_ms = int(settings.filtering.stable_window_minutes * 60 * 1000)
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
         snapshots = await self._quote_store.list()
@@ -126,15 +126,10 @@ class ArbitrageEngine:
         
         # Для каждой группы корня проверяем цены и объединяем/разделяем
         processed_snapshots: list[QuoteSnapshot] = []
-        # Пороги для определения одной монеты vs разных монет:
-        # - Если разница в ценах < 5% (ratio < 1.05) - это точно одна монета (арбитражные погрешности)
-        #   КРИТИЧНО: Для идентичных названий на разных биржах - это могут быть разные монеты!
-        #   Поэтому используем очень строгий порог 5% (например, RWA на MEXC и RWA на KuCoin - разные монеты)
-        # - Если разница в ценах < 50% (ratio < 1.5) - это скорее всего одна монета (только для разных длин названий)
-        # - Если разница в ценах >= 1.5x (ratio >= 1.5) - это точно разные монеты (для идентичных названий)
-        SAME_COIN_RATIO = 1.10  # Разница до 5% - это одна монета (очень строгий порог для идентичных названий)
-        LIKELY_SAME_COIN_RATIO = 1.5  # Разница до 50% - скорее всего одна монета (только для разных длин названий)
-        DIFFERENT_COIN_RATIO = 1.5  # Разница >= 1.5x - точно разные монеты (для идентичных названий)
+        # Пороги для определения одной монеты vs разных монет (из настроек):
+        SAME_COIN_RATIO = self._settings.filtering.same_coin_ratio
+        LIKELY_SAME_COIN_RATIO = self._settings.filtering.likely_same_coin_ratio
+        DIFFERENT_COIN_RATIO = self._settings.filtering.different_coin_ratio
         
         for base_root, group_snapshots in root_groups.items():
             if len(group_snapshots) == 1:
@@ -276,8 +271,8 @@ class ArbitrageEngine:
             min_price_all = min(all_prices)
             max_price_all = max(all_prices)
             # Проверяем, не являются ли это разные монеты (слишком большая разница в ценах)
-            MIN_PRICE_THRESHOLD = 1e-6  # Цены меньше этого считаем практически нулевыми
-            PRICE_RATIO_THRESHOLD = 1.5  # Если цена в 1.5+ раза больше - это разные монеты (строгий порог)
+            MIN_PRICE_THRESHOLD = self._settings.filtering.min_price_threshold
+            PRICE_RATIO_THRESHOLD = self._settings.filtering.price_ratio_threshold
             
             # Если одна цена очень маленькая, а другая нормальная - это разные монеты
             has_near_zero = min_price_all < MIN_PRICE_THRESHOLD and max_price_all >= MIN_PRICE_THRESHOLD

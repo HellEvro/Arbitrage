@@ -33,6 +33,26 @@ class ThresholdsConfig(BaseModel):
     stale_ms: int = Field(default=1500, ge=0)
 
 
+class FilteringConfig(BaseModel):
+    """Конфигурация фильтрации и группировки монет"""
+    # Пороги для определения одной монеты vs разных монет (backend)
+    same_coin_ratio: float = Field(default=1.10, ge=1.0, description="Разница до 10% - это одна монета (для идентичных названий)")
+    likely_same_coin_ratio: float = Field(default=1.5, ge=1.0, description="Разница до 50% - скорее всего одна монета (для разных длин названий)")
+    different_coin_ratio: float = Field(default=1.5, ge=1.0, description="Разница >= 1.5x - точно разные монеты")
+    
+    # Пороги для фильтрации арбитражных возможностей (backend)
+    min_price_threshold: float = Field(default=1e-6, ge=0.0, description="Цены меньше этого считаем практически нулевыми")
+    price_ratio_threshold: float = Field(default=1.5, ge=1.0, description="Если цена в N раз больше - это разные монеты")
+    
+    # Окно стабильности (backend)
+    stable_window_minutes: float = Field(default=5.0, ge=0.0, description="Окно стабильности в минутах для пометки стабильных арбитражей")
+    
+    # Пороги для группировки на фронтенде
+    price_diff_suspicious: float = Field(default=0.3, ge=0.0, description="30% - подозрительная разница")
+    price_diff_threshold: float = Field(default=1.0, ge=0.0, description="100% (в 2 раза) - точно разные монеты")
+    price_diff_aggressive: float = Field(default=2.0, ge=0.0, description="200% (в 3 раза) - агрессивное разделение")
+
+
 class WebConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 5152
@@ -56,6 +76,7 @@ class Settings(BaseModel):
     fees: dict[ExchangeName, FeeConfig] = Field(default_factory=dict)
     slippage_bps: float = Field(default=3.0, ge=0.0)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
+    filtering: FilteringConfig = Field(default_factory=FilteringConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
