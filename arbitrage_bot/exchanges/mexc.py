@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import AsyncIterator, Sequence
 
@@ -81,9 +82,18 @@ class MexcAdapter(BaseAdapter):
             return
         self._log.info("Starting quote stream for %d symbols", len(watched))
         
+        consecutive_errors = 0
+        base_delay = self._poll_interval
+        max_delay = 60.0  # Максимальная задержка 60 секунд
+        
         while not self.closed:
             try:
                 data = await self._http.get_json(f"{self._REST_BASE}/api/v3/ticker/24hr")
+                
+                # Сброс счетчика ошибок при успешном запросе
+                if consecutive_errors > 0:
+                    consecutive_errors = 0
+                    self._log.info("MEXC connection recovered")
                 
                 if not isinstance(data, list):
                     self._log.warning("Unexpected data format from MEXC: %s", type(data))
@@ -112,6 +122,33 @@ class MexcAdapter(BaseAdapter):
                         yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
                     
             except Exception as e:
-                self._log.warning("Failed to fetch quotes from MEXC: %s (will retry)", e)
-            
-            await self.wait_interval()
+                consecutive_errors += 1
+                error_str = str(e)
+                
+                # Проверяем на rate limit или блокировку
+                is_rate_limit = (
+                    "403" in error_str or 
+                    "429" in error_str or
+                    "rate limit" in error_str.lower() or
+                    "too many requests" in error_str.lower() or
+                    "forbidden" in error_str.lower()
+                )
+                
+                if is_rate_limit:
+                    # Экспоненциальная задержка при rate limit
+                    delay = min(base_delay * (2 ** min(consecutive_errors - 1, 5)), max_delay)
+                    self._log.warning(
+                        "MEXC rate limit detected (error #%d): %s. Waiting %.1f seconds before retry...",
+                        consecutive_errors,
+                        error_str[:100],
+                        delay
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self._log.warning(
+                        "Failed to fetch quotes from MEXC (error #%d): %s (will retry after %.1f seconds)",
+                        consecutive_errors,
+                        error_str[:100],
+                        base_delay
+                    )
+                    await self.wait_interval()

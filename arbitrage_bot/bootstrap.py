@@ -25,7 +25,8 @@ def create_adapters(settings: Settings, http_factory: HttpClientFactory) -> Sequ
             case "bybit":
                 adapters.append(BybitAdapter(http_factory, poll_interval=1.0))
             case "mexc":
-                adapters.append(MexcAdapter(http_factory, poll_interval=1.0))
+                # MEXC имеет строгие лимиты на запросы, используем интервал 3 секунды
+                adapters.append(MexcAdapter(http_factory, poll_interval=3.0))
             case "bitget":
                 adapters.append(BitgetAdapter(http_factory, poll_interval=1.0))
             case "okx":
