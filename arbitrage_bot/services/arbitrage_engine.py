@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from typing import Iterable
 
 from arbitrage_bot.config.models import Settings
@@ -19,7 +20,8 @@ class ArbitrageEngine:
         quote_store: QuoteStore, 
         settings: Settings, 
         fee_fetcher: FeeFetcher | None = None,
-        top_n: int = 1000  # Большое значение по умолчанию - фильтрация на клиенте
+        top_n: int = 1000,  # Большое значение по умолчанию - фильтрация на клиенте
+        stable_window_minutes: float = 5.0  # Окно стабильности в минутах
     ) -> None:
         self._quote_store = quote_store
         self._settings = settings
@@ -27,6 +29,9 @@ class ArbitrageEngine:
         self._top_n = top_n
         self._lock = asyncio.Lock()
         self._latest: list[ArbitrageOpportunity] = []
+        # История стабильности: ключ = (symbol, buy_exchange, sell_exchange), значение = deque с временными метками
+        self._stability_history: dict[tuple[str, str, str], deque[int]] = {}
+        self._stable_window_ms = int(stable_window_minutes * 60 * 1000)  # 5 минут в миллисекундах
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
         snapshots = await self._quote_store.list()
@@ -375,6 +380,14 @@ class ArbitrageEngine:
                     buy_symbol = snapshot.exchange_symbols.get(buy_exchange, snapshot.symbol)
                     sell_symbol = snapshot.exchange_symbols.get(sell_exchange, snapshot.symbol)
 
+                    # Проверяем стабильность арбитражной возможности
+                    is_stable = self._check_stability(
+                        snapshot.symbol,
+                        buy_exchange,
+                        sell_exchange,
+                        snapshot.timestamp_ms,
+                    )
+
                     results.append(
                         ArbitrageOpportunity(
                             symbol=snapshot.symbol,
@@ -391,6 +404,7 @@ class ArbitrageEngine:
                             gross_profit_usdt=gross_profit,
                             total_fees_usdt=total_fees,
                             timestamp_ms=snapshot.timestamp_ms,
+                            is_stable=is_stable,
                         )
                     )
 
@@ -414,4 +428,57 @@ class ArbitrageEngine:
         # Возвращаем ВСЕ результаты - фильтрация происходит на клиенте через UI
         # top_n больше не используется для ограничения, только для совместимости
         return results
+
+    def _check_stability(
+        self,
+        symbol: str,
+        buy_exchange: str,
+        sell_exchange: str,
+        timestamp_ms: int,
+    ) -> bool:
+        """Проверяет, является ли арбитражная возможность стабильной.
+        
+        Возможность считается стабильной, если цена на sell_exchange выше цены на buy_exchange
+        в течение последних 5 минут (stable_window_minutes).
+        
+        Это означает, что монета стабильно дороже на одной бирже, чем на другой,
+        что дает время для арбитража: купить на дешевой бирже (buy_exchange),
+        перебросить на дорогую биржу (sell_exchange) и продать там.
+        
+        Args:
+            symbol: Символ монеты
+            buy_exchange: Биржа для покупки (дешевая)
+            sell_exchange: Биржа для продажи (дорогая)
+            timestamp_ms: Текущая временная метка в миллисекундах
+            
+        Returns:
+            True если возможность стабильна (цена выше на sell_exchange в течение 5+ минут)
+        """
+        key = (symbol, buy_exchange, sell_exchange)
+        
+        # Получаем или создаем историю для этой пары
+        if key not in self._stability_history:
+            self._stability_history[key] = deque(maxlen=1000)  # Ограничиваем размер истории
+        
+        history = self._stability_history[key]
+        
+        # Добавляем текущую временную метку
+        history.append(timestamp_ms)
+        
+        # Очищаем старые записи (старше окна стабильности)
+        cutoff_time = timestamp_ms - self._stable_window_ms
+        while history and history[0] < cutoff_time:
+            history.popleft()
+        
+        # Проверяем стабильность: если самая старая запись в истории существует
+        # и разница между текущим временем и самой старой записью >= окна стабильности,
+        # значит возможность существует уже достаточно долго (5 минут)
+        if len(history) > 0:
+            oldest_timestamp = history[0]
+            # Если разница между текущим временем и самой старой записью >= окна стабильности
+            # значит возможность стабильна (существует уже 5+ минут)
+            if timestamp_ms - oldest_timestamp >= self._stable_window_ms:
+                return True
+        
+        return False
 

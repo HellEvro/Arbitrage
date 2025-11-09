@@ -39,4 +39,5 @@ class ArbitrageOpportunity:
     timestamp_ms: int
     base_asset: str | None = None  # Базовая валюта (например, "GAME")
     quote_asset: str | None = None  # Котируемая валюта (например, "USDT")
+    is_stable: bool = False  # Стабильная возможность (цена выше на одной бирже в течение 5 минут)
 

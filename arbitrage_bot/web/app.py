@@ -82,6 +82,7 @@ def create_app(
                 "gross_profit_usdt": opp.gross_profit_usdt,
                 "total_fees_usdt": opp.total_fees_usdt,
                 "timestamp_ms": opp.timestamp_ms,
+                "is_stable": opp.is_stable,
             }
             for opp in opportunities
         ]

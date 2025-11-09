@@ -787,10 +787,12 @@ function renderOpportunities(opportunities) {
       const grossProfit = opp.gross_profit_usdt || 0;
       const totalFees = opp.total_fees_usdt || 0;
       const netProfit = opp.spread_usdt || 0;
+      const isStable = opp.is_stable || false;
+      const stableBadge = isStable ? '<span class="stable-badge" title="Стабильная возможность: монета стабильно дороже на ' + opp.sell_exchange + ' чем на ' + opp.buy_exchange + ' в течение 5+ минут. Есть время для арбитража (купить на ' + opp.buy_exchange + ', продать на ' + opp.sell_exchange + ')">⭐</span>' : '';
       
       html += `
-        <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22; display: ${isExpanded ? '' : 'none'};">
-          <td style="padding-left: 2rem;">→</td>
+        <tr class="symbol-group-row ${isStable ? 'stable-opportunity' : ''}" data-group="${symbol}" style="background-color: ${isStable ? '#1c2a1c' : '#161b22'}; display: ${isExpanded ? '' : 'none'};">
+          <td style="padding-left: 2rem;">→ ${stableBadge}</td>
           <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
           <td>${formatPrice(opp.buy_price)}</td>
           <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
