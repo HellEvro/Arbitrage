@@ -8,7 +8,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
-from arbitrage_bot.config import Settings, load_settings, save_filtering_config, save_profit_config
+from arbitrage_bot.config import Settings, load_settings, save_filtering_config, save_profit_config, save_exchange_config
 from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
 from arbitrage_bot.services.market_discovery import MarketDiscoveryService
 from arbitrage_bot.services.quote_aggregator import QuoteAggregator
@@ -31,6 +31,8 @@ def create_app(
     app.config["SETTINGS"] = settings
     app.config["ARBITRAGE_ENGINE"] = arbitrage_engine
     app.config["AGGREGATOR"] = aggregator
+    # Сохраняем ссылку на основной event loop (будет установлена в AppRunner)
+    app.config["MAIN_LOOP"] = None
     cors = settings.web.cors_origins if settings else ["*"]
     # For Socket.IO, explicitly allow localhost origins
     # Flask-SocketIO: "*" = allow all, list = specific origins
@@ -241,6 +243,127 @@ def create_app(
             "slippage_bps": current_settings.slippage_bps,
             "min_profit_usdt": current_settings.thresholds.min_profit_usdt,
             "min_spread_pct": current_settings.thresholds.min_spread_pct,
+        })
+
+    @app.route("/api/exchange-config", methods=["GET", "POST"])
+    def exchange_config() -> Any:
+        """Get or save exchange enabled/disabled configuration."""
+        current_settings = app.config.get("SETTINGS") or settings
+        current_aggregator = app.config.get("AGGREGATOR") or aggregator
+        current_socketio = socketio
+        
+        if request.method == "POST":
+            # Сохранение конфига
+            if not current_settings:
+                return jsonify({"error": "Settings not available"}), 500
+            
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                # Валидация данных - exchange_enabled должен быть словарем
+                exchange_enabled = data.get("exchange_enabled", {})
+                if not isinstance(exchange_enabled, dict):
+                    return jsonify({"error": "exchange_enabled must be a dictionary"}), 400
+                
+                # Валидация значений (должны быть bool)
+                validated_config = {}
+                for exchange_name, enabled in exchange_enabled.items():
+                    if exchange_name not in current_settings.exchanges:
+                        log.warning("Unknown exchange in config: %s", exchange_name)
+                        continue
+                    validated_config[exchange_name] = bool(enabled)
+                
+                # Сохраняем в файл
+                save_exchange_config(validated_config)
+                log.info("Exchange config saved to file: %s", validated_config)
+                
+                # Перезагружаем настройки
+                new_settings = load_settings()
+                log.info("Settings reloaded from file")
+                
+                # Обновляем aggregator используя основной event loop приложения
+                if current_aggregator:
+                    main_loop = app.config.get("MAIN_LOOP")
+                    if main_loop and main_loop.is_running():
+                        # Используем run_coroutine_threadsafe для выполнения в основном loop
+                        async def update_aggregator():
+                            try:
+                                # Останавливаем отключенные биржи и запускаем включенные
+                                for exchange_name, enabled in validated_config.items():
+                                    if not enabled:
+                                        # Останавливаем только если биржа запущена
+                                        if exchange_name in current_aggregator._exchange_tasks:
+                                            await current_aggregator.stop_exchange(exchange_name)
+                                    else:
+                                        # Запускаем только если биржа не запущена
+                                        if exchange_name not in current_aggregator._exchange_tasks:
+                                            await current_aggregator.start_exchange(exchange_name)
+                                current_aggregator.update_exchange_enabled(validated_config)
+                                log.info("QuoteAggregator updated with new exchange config")
+                            except Exception as e:
+                                log.exception("Error updating aggregator: %s", e)
+                                raise
+                        
+                        # Запускаем в основном loop через run_coroutine_threadsafe
+                        import asyncio
+                        future = asyncio.run_coroutine_threadsafe(update_aggregator(), main_loop)
+                        # Не ждем завершения, чтобы не блокировать Flask
+                        log.info("QuoteAggregator update scheduled in main event loop")
+                    else:
+                        # Если основной loop недоступен, используем фоновый поток
+                        def update_aggregator_sync():
+                            """Синхронная обертка для обновления aggregator."""
+                            import asyncio
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                async def update_aggregator():
+                                    try:
+                                        for exchange_name, enabled in validated_config.items():
+                                            if not enabled:
+                                                if exchange_name in current_aggregator._exchange_tasks:
+                                                    await current_aggregator.stop_exchange(exchange_name)
+                                            else:
+                                                if exchange_name not in current_aggregator._exchange_tasks:
+                                                    await current_aggregator.start_exchange(exchange_name)
+                                        current_aggregator.update_exchange_enabled(validated_config)
+                                        log.info("QuoteAggregator updated with new exchange config")
+                                    except Exception as e:
+                                        log.exception("Error updating aggregator: %s", e)
+                                        raise
+                                
+                                new_loop.run_until_complete(update_aggregator())
+                            except Exception as e:
+                                log.exception("Error in update_aggregator_sync: %s", e)
+                            finally:
+                                new_loop.close()
+                        
+                        current_socketio.start_background_task(update_aggregator_sync)
+                        log.info("QuoteAggregator update scheduled in background thread")
+                else:
+                    log.warning("QuoteAggregator not available, settings not applied")
+                
+                # Обновляем настройки в app.config для следующего запроса
+                app.config["SETTINGS"] = new_settings
+                app.config["AGGREGATOR"] = current_aggregator
+                log.info("App config updated with new settings")
+                
+                return jsonify({
+                    "success": True, 
+                    "message": "Настройки бирж сохранены и применены",
+                    "applied": current_aggregator is not None
+                })
+            except Exception as e:
+                log.exception("Error saving exchange config: %s", e)
+                return jsonify({"error": str(e)}), 500
+        
+        # GET запрос - возвращаем текущие настройки
+        if not current_settings:
+            return jsonify({})
+        return jsonify({
+            "exchange_enabled": dict(current_settings.exchange_enabled),
         })
 
     @app.route("/api/exchange-status")

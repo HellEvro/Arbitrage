@@ -72,6 +72,13 @@ class RedisConfig(BaseModel):
 
 class Settings(BaseModel):
     exchanges: Sequence[ExchangeName] = Field(default_factory=lambda: ["bybit", "mexc", "bitget", "okx", "kucoin"])
+    exchange_enabled: dict[ExchangeName, bool] = Field(default_factory=lambda: {
+        "bybit": True,
+        "mexc": True,
+        "bitget": True,
+        "okx": True,
+        "kucoin": True,
+    })
     notional_usdt_default: PositiveFloat = Field(default=1000)
     fees: dict[ExchangeName, FeeConfig] = Field(default_factory=dict)
     slippage_bps: float = Field(default=3.0, ge=0.0)

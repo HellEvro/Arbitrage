@@ -89,3 +89,23 @@ def save_profit_config(profit_config: dict[str, Any]) -> None:
     with config_path.open("w", encoding="utf-8") as fp:
         yaml.dump(data, fp, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+
+def save_exchange_config(exchange_config: dict[str, Any]) -> None:
+    """Save exchange enabled/disabled configuration to config.yaml file."""
+    config_path = find_config_path()
+    if not config_path:
+        raise RuntimeError("Config file not found")
+    
+    # Load current config
+    with config_path.open("r", encoding="utf-8") as fp:
+        data = yaml.safe_load(fp) or {}
+    
+    # Update exchange_enabled section
+    if "exchange_enabled" not in data:
+        data["exchange_enabled"] = {}
+    data["exchange_enabled"].update(exchange_config)
+    
+    # Save back to file
+    with config_path.open("w", encoding="utf-8") as fp:
+        yaml.dump(data, fp, default_flow_style=False, allow_unicode=True, sort_keys=False)
+

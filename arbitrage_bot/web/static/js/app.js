@@ -8,6 +8,7 @@ const state = {
   blacklist: JSON.parse(localStorage.getItem("arbitrage_blacklist") || "[]"),
   whitelist: JSON.parse(localStorage.getItem("arbitrage_whitelist") || "[]"),
   limit: localStorage.getItem("arbitrage_limit") || "20", // Всегда строка для совместимости с select
+  exchangeConfig: {},
   sortBy: localStorage.getItem("arbitrage_sortBy") || "spread_usdt",
   enableBlacklist: localStorage.getItem("arbitrage_enableBlacklist") !== "false",
   enableWhitelist: localStorage.getItem("arbitrage_enableWhitelist") === "true",
@@ -103,6 +104,97 @@ async function loadProfitConfig() {
   }
 }
 
+async function loadExchangeConfig() {
+  try {
+    const response = await fetch("/api/exchange-config");
+    if (response.ok) {
+      const config = await response.json();
+      state.exchangeConfig = { ...state.exchangeConfig, ...config };
+      console.log("Exchange config loaded:", state.exchangeConfig);
+      // Заполняем чекбоксы на странице настроек
+      updateExchangeConfigUI();
+    } else {
+      console.warn("Failed to load exchange config, using defaults");
+    }
+  } catch (error) {
+    console.error("Error loading exchange config:", error);
+  }
+}
+
+// Обновляем UI с настройками бирж
+function updateExchangeConfigUI() {
+  const cfg = state.exchangeConfig || {};
+  const exchangeEnabled = cfg.exchange_enabled || {};
+  const container = document.getElementById("exchange-config-items");
+  
+  if (!container) return;
+  
+  const exchanges = ["bybit", "mexc", "bitget", "okx", "kucoin"];
+  const exchangeNames = {
+    "bybit": "Bybit",
+    "mexc": "MEXC",
+    "bitget": "Bitget",
+    "okx": "OKX",
+    "kucoin": "KuCoin"
+  };
+  
+  container.innerHTML = exchanges.map(exchange => {
+    const enabled = exchangeEnabled[exchange] !== false; // По умолчанию true
+    return `
+      <div class="setting-item" style="padding: 0.75rem; border-bottom: 1px solid #30363d;">
+        <label style="display: flex; align-items: center; cursor: pointer;">
+          <input type="checkbox" id="exchange-enabled-${exchange}" ${enabled ? "checked" : ""} style="margin-right: 0.75rem; width: 18px; height: 18px;" />
+          <span style="font-size: 1rem; font-weight: 500;">${exchangeNames[exchange]}</span>
+        </label>
+      </div>
+    `;
+  }).join("");
+}
+
+// Сохранение настроек бирж
+document.getElementById("save-exchange-config-btn")?.addEventListener("click", async () => {
+  const statusEl = document.getElementById("exchange-config-status");
+  if (statusEl) statusEl.textContent = "Сохранение...";
+  
+  try {
+    const exchanges = ["bybit", "mexc", "bitget", "okx", "kucoin"];
+    const exchangeEnabled = {};
+    
+    exchanges.forEach(exchange => {
+      const checkbox = document.getElementById(`exchange-enabled-${exchange}`);
+      exchangeEnabled[exchange] = checkbox ? checkbox.checked : true;
+    });
+    
+    // Проверка: минимум 2 биржи должны быть включены
+    const enabledCount = Object.values(exchangeEnabled).filter(Boolean).length;
+    if (enabledCount < 2) {
+      if (statusEl) statusEl.textContent = "❌ Ошибка: минимум 2 биржи должны быть включены";
+      return;
+    }
+    
+    const response = await fetch("/api/exchange-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exchange_enabled: exchangeEnabled })
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      if (statusEl) statusEl.textContent = "✅ " + (result.message || "Настройки сохранены");
+      // Перезагружаем конфиг через небольшую задержку
+      setTimeout(() => {
+        loadExchangeConfig();
+      }, 500);
+    } else {
+      if (statusEl) statusEl.textContent = "❌ Ошибка: " + (result.error || "Неизвестная ошибка");
+    }
+  } catch (error) {
+    console.error("Error saving exchange config:", error);
+    if (statusEl) statusEl.textContent = "❌ Ошибка: " + error.message;
+  }
+});
+
 // Обновляем UI с настройками расчета прибыли
 function updateProfitConfigUI() {
   const cfg = state.profitConfig;
@@ -123,6 +215,7 @@ function updateProfitConfigUI() {
 // Загружаем настройки при инициализации
 loadFilteringConfig();
 loadProfitConfig();
+loadExchangeConfig();
 
 socket.on("connect", () => {
   console.log("WebSocket connected");

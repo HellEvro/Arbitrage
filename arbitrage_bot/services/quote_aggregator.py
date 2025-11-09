@@ -26,11 +26,13 @@ class ExchangeStatus:
 
 
 class QuoteAggregator:
-    def __init__(self, adapters: Sequence[ExchangeAdapter], quote_store: QuoteStore, markets: Sequence[MarketInfo]) -> None:
+    def __init__(self, adapters: Sequence[ExchangeAdapter], quote_store: QuoteStore, markets: Sequence[MarketInfo], exchange_enabled: dict[str, bool] | None = None) -> None:
         self._adapters = adapters
         self._quote_store = quote_store
         self._markets = list(markets)
         self._tasks: list[asyncio.Task[None]] = []
+        # Mapping exchange name -> task for dynamic start/stop
+        self._exchange_tasks: dict[str, asyncio.Task[None]] = {}
         self._reverse_map: dict[tuple[str, str], str] = {}
         self._symbols_by_exchange: dict[str, list[str]] = {}
         # Mapping canonical symbol -> (base_asset, quote_asset)
@@ -40,6 +42,10 @@ class QuoteAggregator:
         self._status_lock = asyncio.Lock()
         # Track unique symbols per exchange (for quote_count)
         self._exchange_symbols: dict[str, set[str]] = {}
+        # Exchange enabled/disabled state
+        self._exchange_enabled: dict[str, bool] = exchange_enabled or {}
+        # Store reference to the main event loop (set when start() is called)
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         self._rebuild_mappings()
         
         # Initialize status for all adapters
@@ -53,29 +59,47 @@ class QuoteAggregator:
                 last_error=None,
             )
             self._exchange_symbols[adapter.name] = set()
+            # Initialize enabled state (default True if not specified)
+            if adapter.name not in self._exchange_enabled:
+                self._exchange_enabled[adapter.name] = True
 
     async def start(self) -> None:
         if self._tasks:
             log.warning("Quote aggregator already started")
             return
         
-        # Count adapters with symbols
+        # Сохраняем ссылку на основной event loop
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Если нет running loop, попробуем получить текущий
+            try:
+                self._main_loop = asyncio.get_event_loop()
+            except RuntimeError:
+                self._main_loop = None
+        
+        # Count enabled adapters with symbols
         active_adapters = sum(
             1 for adapter in self._adapters
-            if self._symbols_by_exchange.get(adapter.name, [])
+            if self._exchange_enabled.get(adapter.name, True) and self._symbols_by_exchange.get(adapter.name, [])
         )
         
         MIN_EXCHANGES_REQUIRED = 2
         if active_adapters < MIN_EXCHANGES_REQUIRED:
             log.warning(
-                "Only %d adapters have symbols configured (minimum %d required). "
+                "Only %d enabled adapters have symbols configured (minimum %d required). "
                 "System will continue but may have limited opportunities.",
                 active_adapters,
                 MIN_EXCHANGES_REQUIRED
             )
         
-        log.info("Starting quote aggregator for %d adapters (%d with symbols)", len(self._adapters), active_adapters)
+        log.info("Starting quote aggregator for %d adapters (%d enabled with symbols)", len(self._adapters), active_adapters)
         for adapter in self._adapters:
+            # Skip disabled exchanges
+            if not self._exchange_enabled.get(adapter.name, True):
+                log.info("Skipping disabled exchange: %s", adapter.name)
+                continue
+                
             symbols = self._symbols_by_exchange.get(adapter.name, [])
             if not symbols:
                 log.warning("No symbols configured for adapter %s; skipping", adapter.name)
@@ -84,6 +108,7 @@ class QuoteAggregator:
             task = asyncio.create_task(self._run_adapter(adapter, symbols))
             task.set_name(f"quote-aggregator-{adapter.name}")
             self._tasks.append(task)
+            self._exchange_tasks[adapter.name] = task
 
     async def stop(self) -> None:
         log.info("Stopping quote aggregator")
@@ -91,7 +116,79 @@ class QuoteAggregator:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        self._exchange_tasks.clear()
         log.info("Quote aggregator stopped")
+    
+    async def start_exchange(self, exchange_name: str) -> bool:
+        """Start quote stream for a specific exchange."""
+        adapter = next((a for a in self._adapters if a.name == exchange_name), None)
+        if not adapter:
+            log.warning("Exchange %s not found", exchange_name)
+            return False
+        
+        if exchange_name in self._exchange_tasks:
+            log.warning("Exchange %s already running", exchange_name)
+            return False
+        
+        symbols = self._symbols_by_exchange.get(exchange_name, [])
+        if not symbols:
+            log.warning("No symbols configured for exchange %s", exchange_name)
+            return False
+        
+        self._exchange_enabled[exchange_name] = True
+        log.info("Starting quote stream for %s with %d symbols", exchange_name, len(symbols))
+        
+        # Используем основной loop для создания задачи
+        loop = self._main_loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+        
+        task = loop.create_task(self._run_adapter(adapter, symbols))
+        task.set_name(f"quote-aggregator-{exchange_name}")
+        self._tasks.append(task)
+        self._exchange_tasks[exchange_name] = task
+        return True
+    
+    async def stop_exchange(self, exchange_name: str) -> bool:
+        """Stop quote stream for a specific exchange."""
+        task = self._exchange_tasks.get(exchange_name)
+        if not task:
+            log.warning("Exchange %s not running", exchange_name)
+            return False
+        
+        self._exchange_enabled[exchange_name] = False
+        log.info("Stopping quote stream for %s", exchange_name)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        
+        # Remove task from lists if it exists
+        if task in self._tasks:
+            self._tasks.remove(task)
+        if exchange_name in self._exchange_tasks:
+            del self._exchange_tasks[exchange_name]
+        
+        # Удаляем данные этой биржи из QuoteStore
+        await self._quote_store.remove_exchange(exchange_name)
+        
+        # Clear quotes for this exchange
+        async with self._status_lock:
+            self._exchange_symbols[exchange_name].clear()
+            status = self._exchange_status[exchange_name]
+            status.connected = False
+            status.quote_count = 0
+        
+        log.info("Exchange %s stopped and data removed from QuoteStore", exchange_name)
+        return True
+    
+    def update_exchange_enabled(self, exchange_enabled: dict[str, bool]) -> None:
+        """Update exchange enabled/disabled state."""
+        self._exchange_enabled.update(exchange_enabled)
 
     async def _run_adapter(self, adapter: ExchangeAdapter, symbols: Sequence[str]) -> None:
         """Run adapter with automatic retry on failures.

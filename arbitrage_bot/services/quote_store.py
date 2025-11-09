@@ -74,4 +74,17 @@ class QuoteStore:
                 )
                 for qs in self._quotes.values()
             ]
+    
+    async def remove_exchange(self, exchange_name: str) -> None:
+        """Remove all quotes for a specific exchange."""
+        exchange_key = exchange_name.lower()
+        async with self._lock:
+            for symbol, snapshot in list(self._quotes.items()):
+                if exchange_key in snapshot.prices:
+                    del snapshot.prices[exchange_key]
+                if exchange_key in snapshot.exchange_symbols:
+                    del snapshot.exchange_symbols[exchange_key]
+                # Если после удаления биржи не осталось цен, удаляем весь snapshot
+                if not snapshot.prices:
+                    del self._quotes[symbol]
 

@@ -125,6 +125,13 @@ class ArbitrageEngine:
         MIN_PRICE_THRESHOLD = self._settings.filtering.min_price_threshold
         PRICE_RATIO_THRESHOLD = self._settings.filtering.price_ratio_threshold
         
+        # Получаем список включенных бирж
+        enabled_exchanges = {
+            exchange.lower() 
+            for exchange, enabled in self._settings.exchange_enabled.items() 
+            if enabled
+        }
+        
         # Функция для извлечения базового корня из base_asset
         def extract_base_root(base_asset: str | None) -> str:
             """Извлекает базовый корень, убирая известные суффиксы."""
@@ -291,8 +298,15 @@ class ArbitrageEngine:
 
         # Теперь обрабатываем объединенные snapshots
         for snapshot in processed_snapshots:
+            # Фильтруем цены по включенным биржам
+            filtered_prices = {
+                exchange: price 
+                for exchange, price in snapshot.prices.items() 
+                if exchange.lower() in enabled_exchanges
+            }
+            
             # Minimum 2 exchanges required for arbitrage
-            if len(snapshot.prices) < 2:
+            if len(filtered_prices) < 2:
                 filtered_by_exchanges += 1
                 continue
 
@@ -300,9 +314,16 @@ class ArbitrageEngine:
                 filtered_by_stale += 1
                 continue
 
+            # Фильтруем exchange_symbols по включенным биржам
+            filtered_exchange_symbols = {
+                exchange: symbol
+                for exchange, symbol in snapshot.exchange_symbols.items()
+                if exchange.lower() in enabled_exchanges
+            }
+            
             # Проверяем ВСЕ возможные пары бирж для этой монеты
             # Это позволит найти все арбитражные возможности, а не только min/max
-            exchanges_list = list(snapshot.prices.items())
+            exchanges_list = list(filtered_prices.items())
             
             # Определяем диапазон цен для этого символа на всех биржах
             all_prices = [price for _, price in exchanges_list if price > 0]
@@ -426,8 +447,8 @@ class ArbitrageEngine:
                     if spread_pct < self._settings.thresholds.min_spread_pct:
                         continue
 
-                    buy_symbol = snapshot.exchange_symbols.get(buy_exchange, snapshot.symbol)
-                    sell_symbol = snapshot.exchange_symbols.get(sell_exchange, snapshot.symbol)
+                    buy_symbol = filtered_exchange_symbols.get(buy_exchange, snapshot.symbol)
+                    sell_symbol = filtered_exchange_symbols.get(sell_exchange, snapshot.symbol)
 
                     # Проверяем стабильность арбитражной возможности
                     is_stable = self._check_stability(

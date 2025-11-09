@@ -61,6 +61,10 @@ class AppRunner:
         """Start all application components."""
         log.info("Starting application runner")
         self.setup_signal_handlers()
+        
+        # Сохраняем ссылку на основной event loop в Flask app для использования в роутах
+        loop = asyncio.get_running_loop()
+        self._app.config["MAIN_LOOP"] = loop
 
         await self._aggregator.start()
         log.info("Quote aggregator started")

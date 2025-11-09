@@ -64,7 +64,7 @@ async def build_app_components(config_path: str | None = None) -> tuple[
     notifier = TelegramNotifier(settings)
 
     markets = await discovery.refresh()
-    aggregator = QuoteAggregator(adapters, quote_store, markets)
+    aggregator = QuoteAggregator(adapters, quote_store, markets, exchange_enabled=dict(settings.exchange_enabled))
 
     return settings, http_factory, adapters, discovery, quote_store, aggregator, arbitrage_engine, notifier
 
