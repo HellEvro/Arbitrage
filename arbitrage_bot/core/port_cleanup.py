@@ -21,6 +21,7 @@ def find_process_on_port(port: int) -> list[int]:
     Works on Windows and Unix-like systems.
     
     IMPORTANT: Excludes current process to avoid self-termination.
+    Also excludes PID 0 (system/TIME_WAIT connections) and other invalid PIDs.
     """
     system = platform.system()
     pids: list[int] = []
@@ -43,6 +44,10 @@ def find_process_on_port(port: int) -> list[int]:
                     if len(parts) >= 5:
                         try:
                             pid = int(parts[-1])
+                            # CRITICAL: Skip invalid PIDs (0 = TIME_WAIT/system, negative = invalid)
+                            if pid <= 0:
+                                log.debug("Skipping invalid PID %d on port %d (TIME_WAIT/system)", pid, port)
+                                continue
                             # CRITICAL: Skip current process
                             if pid == current_pid:
                                 log.debug("Skipping current process %d on port %d", pid, port)
@@ -66,6 +71,10 @@ def find_process_on_port(port: int) -> list[int]:
                     for pid_str in result.stdout.strip().split():
                         try:
                             pid = int(pid_str)
+                            # CRITICAL: Skip invalid PIDs (0 = TIME_WAIT/system, negative = invalid)
+                            if pid <= 0:
+                                log.debug("Skipping invalid PID %d on port %d (TIME_WAIT/system)", pid, port)
+                                continue
                             # CRITICAL: Skip current process
                             if pid == current_pid:
                                 log.debug("Skipping current process %d on port %d (PowerShell)", pid, port)
@@ -391,15 +400,11 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
         if attempt < 2:
             time.sleep(0.5)
     
-    if not pids:
-        log.info("No processes found on port %d", port)
-        return True
-    
-    # CRITICAL: Remove current process from list - never kill ourselves!
-    pids = [pid for pid in pids if pid != current_pid]
+    # CRITICAL: Filter out invalid PIDs (0, negative) and current process
+    pids = [pid for pid in pids if pid > 0 and pid != current_pid]
     
     if not pids:
-        log.info("Only current process (%d) found on port %d, no cleanup needed", current_pid, port)
+        log.info("No valid processes found on port %d (only invalid/system PIDs or current PID %d)", port, current_pid)
         return True
     
     log.info("Found %d process(es) on port %d (excluding current PID %d): %s", len(pids), port, current_pid, pids)
@@ -410,6 +415,9 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
         if pid == current_pid:
             log.warning("CRITICAL: Found current PID %d in list, skipping!", pid)
             continue
+        if pid <= 0:
+            log.debug("Skipping invalid PID %d", pid)
+            continue
         if is_python_process(pid):
             python_pids.append(pid)
             log.debug("Process %d on port %d is a Python process", pid, port)
@@ -417,8 +425,10 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
             log.debug("Process %d on port %d is NOT a Python process, skipping", pid, port)
     
     if not python_pids:
-        log.warning("Found non-Python processes on port %d (PIDs: %s), skipping cleanup", port, pids)
-        return False
+        # If only non-Python processes (or invalid PIDs like 0), consider port free
+        # These are usually TIME_WAIT connections or system processes that don't block the port
+        log.info("No Python processes found on port %d (only non-Python/system PIDs: %s), port considered free", port, pids)
+        return True
     
     # CRITICAL: Final check - ensure we never kill current process
     current_pid = os.getpid()

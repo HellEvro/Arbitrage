@@ -58,37 +58,56 @@ function formatGroupKey(groupKey) {
   // "GAMEUSDT_GAME2_USDT" -> "GAME (GAME2)"
   // "GAMEUSDT_low" -> "GAME (низкая цена)"
   // "NEIROUSDT_NEIRO-USDT|NEIROUSDT_low" -> "NEIRO (NEIRO-USDT, низкая цена)"
+  // "TROLLUSDT_mexc_low" -> "TROLL (Mexc, низкая цена)"
   
-  // Извлекаем суффикс диапазона цен
-  let priceSuffix = '';
-  if (groupKey.endsWith('_low')) {
-    priceSuffix = ' (низкая цена)';
-    groupKey = groupKey.replace(/_low$/, '');
-  } else if (groupKey.endsWith('_high')) {
-    priceSuffix = ' (высокая цена)';
-    groupKey = groupKey.replace(/_high$/, '');
-  }
-  
-  // Разделяем на canonical и символы бирж
+  // Разделяем на части
   const parts = groupKey.split('_');
   if (parts.length === 1) {
     // Только canonical symbol
-    return formatSymbol(groupKey) + priceSuffix;
+    return formatSymbol(groupKey);
   }
   
   const canonical = parts[0];
-  const exchangePart = parts.slice(1).join('_');
+  const rest = parts.slice(1);
+  
+  // Проверяем, является ли последняя часть ценовым диапазоном
+  const lastPart = rest[rest.length - 1];
+  let priceSuffix = '';
+  let exchangePart = rest;
+  if (lastPart === 'low' || lastPart === 'high') {
+    priceSuffix = lastPart === 'low' ? ' (низкая цена)' : ' (высокая цена)';
+    exchangePart = rest.slice(0, -1);
+  }
+  
+  // Если exchangePart пустой, значит был только canonical + priceRange
+  if (exchangePart.length === 0) {
+    return formatSymbol(canonical) + priceSuffix;
+  }
+  
+  const exchangePartStr = exchangePart.join('_');
+  
+  // Проверяем, является ли exchangePart названием биржи (mexc, kucoin, bitget, bybit, okx)
+  const exchangeNames = ['mexc', 'kucoin', 'bitget', 'bybit', 'okx'];
+  const isExchangeName = exchangeNames.some(name => exchangePartStr.toLowerCase().startsWith(name));
+  
+  if (isExchangeName) {
+    // Это группа с названием биржи и ценовым диапазоном (например, "TROLLUSDT_mexc_low")
+    // Формат: {canonical}_{exchange}_{priceRange}
+    const exchangeName = exchangePartStr.split('_')[0];
+    const exchangeDisplay = exchangeName.charAt(0).toUpperCase() + exchangeName.slice(1);
+    return `${formatSymbol(canonical)} (${exchangeDisplay}${priceSuffix ? ', ' + priceSuffix.replace(/[()]/g, '') : ''})`;
+  }
   
   // Если exchangePart содержит разделитель "|", это несколько символов
-  if (exchangePart.includes('|')) {
-    const symbols = exchangePart.split('|').map(s => formatSymbol(s));
+  if (exchangePartStr.includes('|')) {
+    const symbols = exchangePartStr.split('|').map(s => formatSymbol(s));
     // Берем первый уникальный символ для отображения
     const displaySymbol = symbols[0];
     return `${formatSymbol(canonical)} (${displaySymbol}${priceSuffix ? ',' + priceSuffix.replace(/[()]/g, '') : ''})`;
   }
   
   // Один символ биржи
-  const baseFromExchange = exchangePart
+  const baseFromExchange = exchangePartStr
     .toUpperCase()
     .replace(/[-_]/g, '')
     .replace(/USDT$/i, '');
@@ -99,7 +118,7 @@ function formatGroupKey(groupKey) {
   
   // Если базовые символы отличаются, показываем оба
   if (baseFromExchange !== baseFromCanonical && baseFromExchange.length > 0) {
-    return `${formatSymbol(canonical)} (${formatSymbol(exchangePart)}${priceSuffix ? ',' + priceSuffix.replace(/[()]/g, '') : ''})`;
+    return `${formatSymbol(canonical)} (${formatSymbol(exchangePartStr)}${priceSuffix ? ',' + priceSuffix.replace(/[()]/g, '') : ''})`;
   }
   
   // Если базовые символы одинаковые, но формат разный (например NEIRO-USDT vs NEIROUSDT)
@@ -326,7 +345,10 @@ function groupOpportunitiesBySymbol(opportunities) {
     // Также вычисляем кратность (во сколько раз максимальная цена больше минимальной)
     // Если minPrice = 0, но maxPrice > 0 - это точно разные монеты (Infinity)
     // Если обе цены > 0, вычисляем отношение
+    // Также считаем очень маленькие цены (< 1e-6) как практически нулевые
+    const MIN_PRICE_THRESHOLD = 1e-6; // Цены меньше этого считаем практически нулевыми
     let priceRatio = 1;
+    const hasNearZeroPrice = minPrice < MIN_PRICE_THRESHOLD && maxPrice >= MIN_PRICE_THRESHOLD;
     if (minPrice === 0 && maxPrice > 0) {
       priceRatio = Infinity; // Нулевая цена на одной бирже = точно разные монеты
     } else if (minPrice > 0) {
@@ -359,69 +381,114 @@ function groupOpportunitiesBySymbol(opportunities) {
     // 3. Если разница подозрительная (>30%) - проверяем символы и разделяем при необходимости
     // 4. Если есть символы с разными базовыми символами И цены похожи - это одна монета (GAME и GAME2 по одной цене)
     
-    // Используем более строгий критерий: разница >100% ИЛИ кратность >2x ИЛИ одна цена = 0
-    // Если одна цена нулевая - это точно разные монеты
+    // Используем более строгий критерий: разница >100% ИЛИ кратность >2x ИЛИ одна цена = 0 ИЛИ очень маленькая
+    // Если одна цена нулевая или очень маленькая - это точно разные монеты
     const hasZeroPrice = minPrice === 0 && maxPrice > 0;
-    const isDefinitelyDifferent = hasZeroPrice || priceDiff > PRICE_DIFF_THRESHOLD || priceRatio > 2.0;
-    const isAggressivelyDifferent = hasZeroPrice || priceDiff > PRICE_DIFF_AGGRESSIVE || priceRatio > 3.0;
+    // Если priceRatio очень большой (>100), это точно разные монеты, независимо от других условий
+    const isExtremelyDifferent = priceRatio > 100 || hasZeroPrice || hasNearZeroPrice;
+    const isDefinitelyDifferent = isExtremelyDifferent || priceDiff > PRICE_DIFF_THRESHOLD || priceRatio > 2.0;
+    const isAggressivelyDifferent = isExtremelyDifferent || priceDiff > PRICE_DIFF_AGGRESSIVE || priceRatio > 3.0;
     const isSuspicious = priceDiff > PRICE_DIFF_SUSPICIOUS || priceRatio > 1.5;
     
-    if (isDefinitelyDifferent && group.length > 1) {
+    // Если цены очень сильно различаются (разные монеты), разделяем даже одну возможность
+    // Для остальных случаев требуем минимум 2 возможности
+    const shouldSplit = isExtremelyDifferent || (isDefinitelyDifferent && group.length > 1);
+    
+    if (shouldSplit) {
       // Цены сильно различаются - это разные монеты, разделяем по символу биржи и цене
       
-      // Если есть нулевые цены - разделяем по биржам с нулевыми и ненулевыми ценами
-      if (hasZeroPrice) {
-        // Группируем по наличию нулевых цен
-        const zeroPriceGroups = { zero: [], nonZero: [] };
+      // Если есть нулевые или очень маленькие цены - разделяем по биржам с нулевыми/маленькими и нормальными ценами
+      if (hasZeroPrice || hasNearZeroPrice || isExtremelyDifferent) {
+        // Для очень больших различий создаем отдельные группы по биржам и ценам
+        // Это позволяет разделить даже одну возможность арбитража на разные группы
+        const exchangePriceGroups = {};
         for (const opp of group) {
-          const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
-          if (oppAvgPrice === 0 || opp.buy_price === 0 || opp.sell_price === 0) {
-            zeroPriceGroups.zero.push(opp);
+          const buyPrice = opp.buy_price || 0;
+          const sellPrice = opp.sell_price || 0;
+          const buyIsLow = buyPrice < MIN_PRICE_THRESHOLD || buyPrice === 0;
+          const sellIsLow = sellPrice < MIN_PRICE_THRESHOLD || sellPrice === 0;
+          
+          // Если цены очень сильно различаются, создаем отдельные группы для каждой биржи
+          if (buyIsLow && !sellIsLow) {
+            // Buy биржа с очень маленькой ценой, sell - нормальная
+            // Создаем две отдельные группы для визуализации разных монет
+            const buyGroupKey = `${canonical}_${opp.buy_exchange}_low`;
+            const sellGroupKey = `${canonical}_${opp.sell_exchange}_high`;
+            if (!exchangePriceGroups[buyGroupKey]) {
+              exchangePriceGroups[buyGroupKey] = [];
+            }
+            if (!exchangePriceGroups[sellGroupKey]) {
+              exchangePriceGroups[sellGroupKey] = [];
+            }
+            // Добавляем возможность в обе группы, но с пометкой для фильтрации
+            exchangePriceGroups[buyGroupKey].push({...opp, _groupType: 'buy_low'});
+            exchangePriceGroups[sellGroupKey].push({...opp, _groupType: 'sell_high'});
+          } else if (!buyIsLow && sellIsLow) {
+            // Buy биржа нормальная, sell - очень маленькая цена
+            const buyGroupKey = `${canonical}_${opp.buy_exchange}_high`;
+            const sellGroupKey = `${canonical}_${opp.sell_exchange}_low`;
+            if (!exchangePriceGroups[buyGroupKey]) {
+              exchangePriceGroups[buyGroupKey] = [];
+            }
+            if (!exchangePriceGroups[sellGroupKey]) {
+              exchangePriceGroups[sellGroupKey] = [];
+            }
+            exchangePriceGroups[buyGroupKey].push({...opp, _groupType: 'buy_high'});
+            exchangePriceGroups[sellGroupKey].push({...opp, _groupType: 'sell_low'});
           } else {
-            zeroPriceGroups.nonZero.push(opp);
+            // Обе цены в одном диапазоне или обе очень маленькие - группируем по биржам и ценовому диапазону
+            const oppAvgPrice = (buyPrice + sellPrice) / 2;
+            let priceRange = 'normal';
+            if (oppAvgPrice < MIN_PRICE_THRESHOLD || oppAvgPrice === 0) {
+              priceRange = 'low';
+            } else if (oppAvgPrice > avgPrice * 1.5) {
+              priceRange = 'high';
+            } else if (oppAvgPrice < avgPrice * 0.5) {
+              priceRange = 'low';
+            }
+            const exchanges = [opp.buy_exchange, opp.sell_exchange].sort().join('|');
+            const groupKey = `${canonical}_${exchanges}_${priceRange}`;
+            if (!exchangePriceGroups[groupKey]) {
+              exchangePriceGroups[groupKey] = [];
+            }
+            exchangePriceGroups[groupKey].push(opp);
           }
         }
         
-        // Разделяем на группы
-        if (zeroPriceGroups.zero.length > 0) {
-          finalGroups[`${canonical}_zero`] = zeroPriceGroups.zero;
-        }
-        if (zeroPriceGroups.nonZero.length > 0) {
-          // Для ненулевых цен применяем обычную логику разделения
-          const nonZeroGroup = zeroPriceGroups.nonZero;
-          const nonZeroPrices = nonZeroGroup.map(o => (o.buy_price + o.sell_price) / 2).filter(p => p > 0);
-          if (nonZeroPrices.length > 1) {
-            const nonZeroAvg = nonZeroPrices.reduce((a, b) => a + b, 0) / nonZeroPrices.length;
-            const nonZeroMin = Math.min(...nonZeroPrices);
-            const nonZeroMax = Math.max(...nonZeroPrices);
-            const nonZeroRatio = nonZeroMin > 0 ? nonZeroMax / nonZeroMin : Infinity;
-            
-            if (nonZeroRatio > 2.0) {
-              // Разделяем по цене
-              for (const opp of nonZeroGroup) {
-                const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
-                let groupKey = canonical;
-                if (oppAvgPrice < nonZeroAvg * 0.7) {
-                  groupKey = `${canonical}_low`;
-                } else if (oppAvgPrice > nonZeroAvg * 1.3) {
-                  groupKey = `${canonical}_high`;
-                }
-                if (!finalGroups[groupKey]) {
-                  finalGroups[groupKey] = [];
-                }
-                finalGroups[groupKey].push(opp);
-              }
-            } else {
-              finalGroups[canonical] = nonZeroGroup;
-            }
-          } else {
-            finalGroups[canonical] = nonZeroGroup;
-          }
+        // Добавляем все группы в finalGroups
+        for (const groupKey in exchangePriceGroups) {
+          finalGroups[groupKey] = exchangePriceGroups[groupKey];
         }
       } else {
-        // Нет нулевых цен - применяем обычную логику разделения по базовым символам
-        const baseSymbolGroups = {};
-        for (const opp of group) {
+        // Нет нулевых цен, но цены сильно различаются - разделяем по биржам и ценам
+        // Если priceRatio очень большой (>100), разделяем напрямую по биржам и ценам
+        if (isExtremelyDifferent && priceRatio > 100) {
+          // Разделяем напрямую по биржам и ценам, без проверки базовых символов
+          const exchangePriceGroups = {};
+          for (const opp of group) {
+            const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
+            // Создаем ключ на основе бирж и ценового диапазона
+            const exchanges = [opp.buy_exchange, opp.sell_exchange].sort().join('|');
+            let priceRange = 'normal';
+            if (oppAvgPrice < avgPrice * 0.5) {
+              priceRange = 'low';
+            } else if (oppAvgPrice > avgPrice * 1.5) {
+              priceRange = 'high';
+            }
+            const groupKey = `${canonical}_${exchanges}_${priceRange}`;
+            if (!exchangePriceGroups[groupKey]) {
+              exchangePriceGroups[groupKey] = [];
+            }
+            exchangePriceGroups[groupKey].push(opp);
+          }
+          // Добавляем все группы в finalGroups
+          for (const groupKey in exchangePriceGroups) {
+            finalGroups[groupKey] = exchangePriceGroups[groupKey];
+          }
+        } else {
+          // Применяем обычную логику разделения по базовым символам
+          const baseSymbolGroups = {};
+          for (const opp of group) {
           // Получаем все символы бирж для этой возможности
           const allSymbols = [opp.buy_symbol, opp.sell_symbol].filter(s => s);
           
@@ -508,6 +575,7 @@ function groupOpportunitiesBySymbol(opportunities) {
             const groupKey = baseKey === baseFromCanonical ? canonical : `${canonical}_${baseKey}`;
             finalGroups[groupKey] = baseGroup;
           }
+        }
         }
       }
     } else if (isSuspicious && group.length > 1) {
