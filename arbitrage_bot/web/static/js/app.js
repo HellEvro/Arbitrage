@@ -325,14 +325,36 @@ function filterOpportunities(opportunities) {
   // Применить черный список
   if (state.enableBlacklist && state.blacklist.length > 0) {
     const beforeBlacklist = filtered.length;
-    const blacklistSet = new Set(state.blacklist.map((s) => s.toUpperCase()));
+    // Создаем Set для быстрого поиска, поддерживая оба формата: MERL и MERLUSDT
+    const blacklistSet = new Set();
+    state.blacklist.forEach((s) => {
+      const upper = s.toUpperCase().trim();
+      blacklistSet.add(upper);
+      // Если символ не заканчивается на USDT, добавляем также вариант с USDT
+      if (!upper.endsWith("USDT")) {
+        blacklistSet.add(upper + "USDT");
+      }
+      // Если символ заканчивается на USDT, добавляем также вариант без USDT
+      if (upper.endsWith("USDT")) {
+        blacklistSet.add(upper.slice(0, -4)); // Убираем "USDT"
+      }
+    });
+    
     filtered = filtered.filter((opp) => {
       const symbolUpper = opp.symbol.toUpperCase();
+      // Проверяем полное совпадение
       const isBlacklisted = blacklistSet.has(symbolUpper);
-      if (isBlacklisted) {
-        console.log("[FILTER] Blacklisted:", symbolUpper);
+      // Также проверяем base_asset если есть
+      let isBlacklistedByBase = false;
+      if (opp.base_asset) {
+        const baseUpper = opp.base_asset.toUpperCase();
+        isBlacklistedByBase = blacklistSet.has(baseUpper) || blacklistSet.has(baseUpper + "USDT");
       }
-      return !isBlacklisted;
+      
+      if (isBlacklisted || isBlacklistedByBase) {
+        console.log("[FILTER] Blacklisted:", symbolUpper, "base:", opp.base_asset, "matched:", isBlacklisted ? "symbol" : "base");
+      }
+      return !(isBlacklisted || isBlacklistedByBase);
     });
     console.log("[FILTER] After blacklist:", filtered.length, "removed:", beforeBlacklist - filtered.length, "blacklist:", state.blacklist);
   }
@@ -340,16 +362,47 @@ function filterOpportunities(opportunities) {
   // Применить белый список
   if (state.enableWhitelist && state.whitelist.length > 0) {
     const beforeWhitelist = filtered.length;
-    const whitelistSet = new Set(state.whitelist.map((s) => s.toUpperCase()));
+    // Создаем Set для быстрого поиска, поддерживая оба формата: MERL и MERLUSDT
+    const whitelistSet = new Set();
+    state.whitelist.forEach((s) => {
+      const upper = s.toUpperCase().trim();
+      whitelistSet.add(upper);
+      // Если символ не заканчивается на USDT, добавляем также вариант с USDT
+      if (!upper.endsWith("USDT")) {
+        whitelistSet.add(upper + "USDT");
+      }
+      // Если символ заканчивается на USDT, добавляем также вариант без USDT
+      if (upper.endsWith("USDT")) {
+        whitelistSet.add(upper.slice(0, -4)); // Убираем "USDT"
+      }
+    });
+    
     const whitelisted = filtered.filter((opp) => {
       const symbolUpper = opp.symbol.toUpperCase();
+      // Проверяем полное совпадение
       const isWhitelisted = whitelistSet.has(symbolUpper);
-      if (isWhitelisted) {
-        console.log("[FILTER] Whitelisted:", symbolUpper);
+      // Также проверяем base_asset если есть
+      let isWhitelistedByBase = false;
+      if (opp.base_asset) {
+        const baseUpper = opp.base_asset.toUpperCase();
+        isWhitelistedByBase = whitelistSet.has(baseUpper) || whitelistSet.has(baseUpper + "USDT");
       }
-      return isWhitelisted;
+      
+      if (isWhitelisted || isWhitelistedByBase) {
+        console.log("[FILTER] Whitelisted:", symbolUpper, "base:", opp.base_asset, "matched:", isWhitelisted ? "symbol" : "base");
+      }
+      return isWhitelisted || isWhitelistedByBase;
     });
-    const others = filtered.filter((opp) => !whitelistSet.has(opp.symbol.toUpperCase()));
+    const others = filtered.filter((opp) => {
+      const symbolUpper = opp.symbol.toUpperCase();
+      const isWhitelisted = whitelistSet.has(symbolUpper);
+      let isWhitelistedByBase = false;
+      if (opp.base_asset) {
+        const baseUpper = opp.base_asset.toUpperCase();
+        isWhitelistedByBase = whitelistSet.has(baseUpper) || whitelistSet.has(baseUpper + "USDT");
+      }
+      return !(isWhitelisted || isWhitelistedByBase);
+    });
     
     if (state.autoSortWhitelist) {
       filtered = [...whitelisted, ...others];
