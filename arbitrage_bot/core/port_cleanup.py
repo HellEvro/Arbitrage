@@ -375,8 +375,12 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
     
     Returns:
         True if port is now free, False otherwise
+    
+    IMPORTANT: Never kills current process (os.getpid()).
     """
-    log.info("Checking for processes on port %d", port)
+    # Get current process ID - CRITICAL for avoiding self-termination
+    current_pid = os.getpid()
+    log.info("Current process PID: %d, checking for processes on port %d", current_pid, port)
     
     # Try multiple times to find processes (they might be starting up)
     pids = []
@@ -387,58 +391,62 @@ def cleanup_port(port: int, wait_timeout: float = 15.0) -> bool:
         if attempt < 2:
             time.sleep(0.5)
     
-    # Skip command line check to avoid blocking - only check port
-    cmdline_pids_set = set()  # Empty set - don't use command line check
-    
     if not pids:
         log.info("No processes found on port %d", port)
         return True
     
-    # CRITICAL: Remove current process from list (shouldn't be there, but safety check)
-    current_pid = os.getpid()
+    # CRITICAL: Remove current process from list - never kill ourselves!
     pids = [pid for pid in pids if pid != current_pid]
     
     if not pids:
+        log.info("Only current process (%d) found on port %d, no cleanup needed", current_pid, port)
         return True
     
-    # Check which are Python processes - simplified
-    # If we found processes by command line, they're already Python processes
+    log.info("Found %d process(es) on port %d (excluding current PID %d): %s", len(pids), port, current_pid, pids)
+    
+    # Check which are Python processes - filter out non-Python processes
     python_pids = []
     for pid in pids:
         if pid == current_pid:
-            continue  # Skip current process
-        # If found by command line, it's already a Python process - skip check
-        if pid in cmdline_pids_set:
+            log.warning("CRITICAL: Found current PID %d in list, skipping!", pid)
+            continue
+        if is_python_process(pid):
             python_pids.append(pid)
+            log.debug("Process %d on port %d is a Python process", pid, port)
         else:
-            # Only check processes found by port - but skip check to avoid blocking
-            # Assume all processes on port are Python if we're cleaning up
-            python_pids.append(pid)
+            log.debug("Process %d on port %d is NOT a Python process, skipping", pid, port)
     
     if not python_pids:
-        log.warning("Found non-Python processes on port %d (PIDs: %s), skipping", port, pids)
+        log.warning("Found non-Python processes on port %d (PIDs: %s), skipping cleanup", port, pids)
         return False
     
-    # Kill all Python processes on the port - be aggressive
-    # CRITICAL: Double-check we're not killing ourselves
+    # CRITICAL: Final check - ensure we never kill current process
     current_pid = os.getpid()
     python_pids = [pid for pid in python_pids if pid != current_pid]
     
     if not python_pids:
+        log.info("No Python processes to kill (only current PID %d remains)", current_pid)
         return True
+    
+    log.info("Killing %d Python process(es) on port %d: %s (current PID %d excluded)", 
+             len(python_pids), port, python_pids, current_pid)
     
     killed = []
     failed = []
     for pid in python_pids:
+        # CRITICAL: Triple-check we're not killing ourselves
         if pid == current_pid:
             log.error("CRITICAL ERROR: Attempted to kill current process %d! Skipping!", pid)
             continue
-        # Don't log before kill_process - may cause blocking
+        
+        log.info("Killing Python process %d on port %d...", pid, port)
         try:
-            if kill_process(pid, timeout=min(wait_timeout, 3.0)):  # Shorter timeout
+            if kill_process(pid, timeout=min(wait_timeout, 3.0)):
                 killed.append(pid)
+                log.info("Successfully killed process %d", pid)
             else:
                 failed.append(pid)
+                log.warning("Failed to kill process %d", pid)
         except Exception as e:
             log.warning("Exception killing process %d: %s", pid, e)
             failed.append(pid)
