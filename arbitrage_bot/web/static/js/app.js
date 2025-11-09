@@ -440,8 +440,23 @@ function filterOpportunities(opportunities) {
     filtered = filtered.filter((opp) => {
       // Проверяем каждую запись в черном списке
       for (const item of state.blacklist) {
-        const itemSymbol = item.symbol.toUpperCase();
-        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        // Извлекаем символ и биржу из записи (поддержка старого и нового формата)
+        let itemSymbol, itemExchangeLower;
+        
+        if (typeof item === 'string') {
+          // Старый формат: просто строка
+          itemSymbol = item.toUpperCase().trim();
+          itemExchangeLower = null;
+        } else {
+          // Новый формат: объект {symbol, exchange}
+          itemSymbol = (item.symbol || '').toUpperCase().trim();
+          const itemExchange = item.exchange;
+          itemExchangeLower = (itemExchange && typeof itemExchange === 'string' && itemExchange.trim()) 
+            ? itemExchange.toLowerCase().trim() 
+            : null;
+        }
+        
+        if (!itemSymbol) continue; // Пропускаем пустые записи
         
         // Проверяем совпадение символа
         let symbolMatches = false;
@@ -468,16 +483,21 @@ function filterOpportunities(opportunities) {
         
         if (symbolMatches) {
           // Если биржа не указана в черном списке, фильтруем на всех биржах
-          if (!itemExchange) {
-            return false; // Исключаем эту возможность
+          if (itemExchangeLower === null || itemExchangeLower === '') {
+            return false; // Исключаем эту возможность полностью
           }
           // Если биржа указана, проверяем совпадение с биржами в возможности
-          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
-            return false; // Исключаем эту возможность
+          // Исключаем только если указанная биржа участвует в этой возможности
+          const buyExchangeLower = opp.buy_exchange?.toLowerCase()?.trim();
+          const sellExchangeLower = opp.sell_exchange?.toLowerCase()?.trim();
+          if (itemExchangeLower === buyExchangeLower || itemExchangeLower === sellExchangeLower) {
+            return false; // Исключаем эту возможность (одна из бирж совпадает)
           }
+          // Если символ совпадает, но биржа НЕ совпадает - продолжаем проверку других записей
+          // Это позволяет показывать возможности между другими биржами
         }
       }
-      return true; // Не в черном списке
+      return true; // Не в черном списке или биржа не совпадает
     });
   }
 
@@ -486,8 +506,23 @@ function filterOpportunities(opportunities) {
     const whitelisted = filtered.filter((opp) => {
       // Проверяем каждую запись в белом списке
       for (const item of state.whitelist) {
-        const itemSymbol = item.symbol.toUpperCase();
-        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        // Извлекаем символ и биржу из записи (поддержка старого и нового формата)
+        let itemSymbol, itemExchangeLower;
+        
+        if (typeof item === 'string') {
+          // Старый формат: просто строка
+          itemSymbol = item.toUpperCase().trim();
+          itemExchangeLower = null;
+        } else {
+          // Новый формат: объект {symbol, exchange}
+          itemSymbol = (item.symbol || '').toUpperCase().trim();
+          const itemExchange = item.exchange;
+          itemExchangeLower = (itemExchange && typeof itemExchange === 'string' && itemExchange.trim()) 
+            ? itemExchange.toLowerCase().trim() 
+            : null;
+        }
+        
+        if (!itemSymbol) continue; // Пропускаем пустые записи
         
         // Проверяем совпадение символа
         let symbolMatches = false;
@@ -514,11 +549,13 @@ function filterOpportunities(opportunities) {
         
         if (symbolMatches) {
           // Если биржа не указана в белом списке, разрешаем на всех биржах
-          if (!itemExchange) {
+          if (itemExchangeLower === null || itemExchangeLower === '') {
             return true; // Включаем эту возможность
           }
           // Если биржа указана, проверяем совпадение с биржами в возможности
-          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
+          const buyExchangeLower = opp.buy_exchange?.toLowerCase()?.trim();
+          const sellExchangeLower = opp.sell_exchange?.toLowerCase()?.trim();
+          if (itemExchangeLower === buyExchangeLower || itemExchangeLower === sellExchangeLower) {
             return true; // Включаем эту возможность
           }
         }
@@ -529,8 +566,23 @@ function filterOpportunities(opportunities) {
     const others = filtered.filter((opp) => {
       // Проверяем, не в белом списке ли эта возможность
       for (const item of state.whitelist) {
-        const itemSymbol = item.symbol.toUpperCase();
-        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        // Извлекаем символ и биржу из записи (поддержка старого и нового формата)
+        let itemSymbol, itemExchangeLower;
+        
+        if (typeof item === 'string') {
+          // Старый формат: просто строка
+          itemSymbol = item.toUpperCase().trim();
+          itemExchangeLower = null;
+        } else {
+          // Новый формат: объект {symbol, exchange}
+          itemSymbol = (item.symbol || '').toUpperCase().trim();
+          const itemExchange = item.exchange;
+          itemExchangeLower = (itemExchange && typeof itemExchange === 'string' && itemExchange.trim()) 
+            ? itemExchange.toLowerCase().trim() 
+            : null;
+        }
+        
+        if (!itemSymbol) continue; // Пропускаем пустые записи
         
         let symbolMatches = false;
         const symbolUpper = opp.symbol.toUpperCase();
@@ -552,10 +604,12 @@ function filterOpportunities(opportunities) {
         }
         
         if (symbolMatches) {
-          if (!itemExchange) {
+          if (itemExchangeLower === null || itemExchangeLower === '') {
             return false; // В белом списке
           }
-          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
+          const buyExchangeLower = opp.buy_exchange?.toLowerCase()?.trim();
+          const sellExchangeLower = opp.sell_exchange?.toLowerCase()?.trim();
+          if (itemExchangeLower === buyExchangeLower || itemExchangeLower === sellExchangeLower) {
             return false; // В белом списке
           }
         }
@@ -1449,14 +1503,23 @@ function addToBlacklist(symbol, exchange = null) {
   const upperSymbol = symbol.toUpperCase().trim();
   if (!upperSymbol) return;
   
-  const newItem = { symbol: upperSymbol, exchange: exchange ? exchange.toLowerCase() : null };
+  const exchangeLower = exchange ? exchange.toLowerCase() : null;
+  const newItem = { symbol: upperSymbol, exchange: exchangeLower };
   
   // Проверяем, нет ли уже такой записи
   const exists = state.blacklist.some(item => {
-    const itemSymbol = typeof item === 'string' ? item : item.symbol;
-    const itemExchange = typeof item === 'string' ? null : item.exchange;
-    return itemSymbol === upperSymbol && 
-           (itemExchange === null && exchange === null || itemExchange === exchange?.toLowerCase());
+    const itemSymbol = (typeof item === 'string' ? item : (item.symbol || '')).toUpperCase().trim();
+    const itemExchange = (typeof item === 'string' ? null : (item.exchange || null));
+    const itemExchangeLower = itemExchange ? itemExchange.toLowerCase() : null;
+    
+    // Проверяем совпадение символа
+    if (itemSymbol !== upperSymbol) return false;
+    
+    // Проверяем совпадение биржи
+    if (itemExchangeLower === null && exchangeLower === null) return true; // Обе без биржи
+    if (itemExchangeLower === exchangeLower) return true; // Обе с одинаковой биржей
+    
+    return false;
   });
   
   if (!exists) {
@@ -1533,14 +1596,23 @@ function addToWhitelist(symbol, exchange = null) {
   const upperSymbol = symbol.toUpperCase().trim();
   if (!upperSymbol) return;
   
-  const newItem = { symbol: upperSymbol, exchange: exchange ? exchange.toLowerCase() : null };
+  const exchangeLower = exchange ? exchange.toLowerCase() : null;
+  const newItem = { symbol: upperSymbol, exchange: exchangeLower };
   
   // Проверяем, нет ли уже такой записи
   const exists = state.whitelist.some(item => {
-    const itemSymbol = typeof item === 'string' ? item : item.symbol;
-    const itemExchange = typeof item === 'string' ? null : item.exchange;
-    return itemSymbol === upperSymbol && 
-           (itemExchange === null && exchange === null || itemExchange === exchange?.toLowerCase());
+    const itemSymbol = (typeof item === 'string' ? item : (item.symbol || '')).toUpperCase().trim();
+    const itemExchange = (typeof item === 'string' ? null : (item.exchange || null));
+    const itemExchangeLower = itemExchange ? itemExchange.toLowerCase() : null;
+    
+    // Проверяем совпадение символа
+    if (itemSymbol !== upperSymbol) return false;
+    
+    // Проверяем совпадение биржи
+    if (itemExchangeLower === null && exchangeLower === null) return true; // Обе без биржи
+    if (itemExchangeLower === exchangeLower) return true; // Обе с одинаковой биржей
+    
+    return false;
   });
   
   if (!exists) {
