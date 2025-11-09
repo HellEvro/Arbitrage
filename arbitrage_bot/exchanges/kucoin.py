@@ -29,6 +29,11 @@ class KucoinAdapter(BaseAdapter):
                     continue
                 if item.get("enableTrading") is not True:
                     continue
+                # KuCoin API: Поле "market" имеет значения "USDS", "BTC", "ALTS" и т.д.
+                # Все USDT рынки обычно спотовые (market="USDS")
+                # Фьючерсы находятся в отдельном API (/api/v1/contracts)
+                # Поэтому для /api/v1/symbols все рынки - спотовые
+                # Дополнительная проверка не требуется
                 markets.append(
                     ExchangeMarket(
                         symbol=item.get("symbol", "").upper(),

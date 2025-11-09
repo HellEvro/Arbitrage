@@ -27,6 +27,11 @@ class BitgetAdapter(BaseAdapter):
             for item in items:
                 if item.get("quoteCoin", "").upper() != "USDT":
                     continue
+                # Bitget: /api/spot/v1/public/products возвращает только спотовые рынки
+                # Проверяем статус - только "online" рынки активны
+                status = item.get("status", "").lower()
+                if status != "online":
+                    continue
                 symbol = item.get("symbol", "")
                 if not symbol:
                     continue

@@ -275,7 +275,13 @@ function limitOpportunities(opportunities) {
 }
 
 function groupOpportunitiesBySymbol(opportunities) {
-  const PRICE_DIFF_THRESHOLD = 0.5; // 50% разница в цене = разные монеты
+  // Пороги для определения разных монет:
+  // - Если разница в ценах > 30% - подозрительно, проверяем дальше
+  // - Если разница в ценах > 100% (в 2 раза) - точно разные монеты
+  // - Если разница в ценах > 200% (в 3 раза) - точно разные монеты, агрессивное разделение
+  const PRICE_DIFF_SUSPICIOUS = 0.3; // 30% - подозрительная разница
+  const PRICE_DIFF_THRESHOLD = 1.0; // 100% (в 2 раза) - точно разные монеты
+  const PRICE_DIFF_AGGRESSIVE = 2.0; // 200% (в 3 раза) - агрессивное разделение
   
   // Извлекаем базовый символ (без разделителей и USDT)
   const normalizeSymbol = (sym) => {
@@ -313,7 +319,21 @@ function groupOpportunitiesBySymbol(opportunities) {
     const avgPrice = allPrices.reduce((a, b) => a + b, 0) / allPrices.length;
     const minPrice = Math.min(...allPrices);
     const maxPrice = Math.max(...allPrices);
-    const priceDiff = (maxPrice - minPrice) / avgPrice;
+    
+    // Вычисляем разницу в ценах (относительно средней)
+    const priceDiff = avgPrice > 0 ? (maxPrice - minPrice) / avgPrice : 0;
+    
+    // Также вычисляем кратность (во сколько раз максимальная цена больше минимальной)
+    // Если minPrice = 0, но maxPrice > 0 - это точно разные монеты (Infinity)
+    // Если обе цены > 0, вычисляем отношение
+    let priceRatio = 1;
+    if (minPrice === 0 && maxPrice > 0) {
+      priceRatio = Infinity; // Нулевая цена на одной бирже = точно разные монеты
+    } else if (minPrice > 0) {
+      priceRatio = maxPrice / minPrice;
+    } else if (maxPrice === 0 && minPrice === 0) {
+      priceRatio = 1; // Обе нулевые - не можем определить
+    }
     
     const baseFromCanonical = normalizeSymbol(canonical);
     
@@ -334,66 +354,195 @@ function groupOpportunitiesBySymbol(opportunities) {
     }
     
     // Логика разделения:
-    // 1. Если цены сильно различаются (>50%) - это разные монеты, разделяем по цене
-    // 2. Если есть символы с разными базовыми символами И цены похожи - это одна монета (GAME и GAME2 по одной цене)
-    // 3. Если есть символы с разными базовыми символами И цены сильно различаются - это разные монеты, разделяем по символу
+    // 1. Если разница в ценах очень большая (>200% или >3x) - агрессивно разделяем по цене
+    // 2. Если разница в ценах большая (>100% или >2x) - разделяем по цене и символу
+    // 3. Если разница подозрительная (>30%) - проверяем символы и разделяем при необходимости
+    // 4. Если есть символы с разными базовыми символами И цены похожи - это одна монета (GAME и GAME2 по одной цене)
     
-    if (priceDiff > PRICE_DIFF_THRESHOLD && group.length > 1) {
+    // Используем более строгий критерий: разница >100% ИЛИ кратность >2x ИЛИ одна цена = 0
+    // Если одна цена нулевая - это точно разные монеты
+    const hasZeroPrice = minPrice === 0 && maxPrice > 0;
+    const isDefinitelyDifferent = hasZeroPrice || priceDiff > PRICE_DIFF_THRESHOLD || priceRatio > 2.0;
+    const isAggressivelyDifferent = hasZeroPrice || priceDiff > PRICE_DIFF_AGGRESSIVE || priceRatio > 3.0;
+    const isSuspicious = priceDiff > PRICE_DIFF_SUSPICIOUS || priceRatio > 1.5;
+    
+    if (isDefinitelyDifferent && group.length > 1) {
       // Цены сильно различаются - это разные монеты, разделяем по символу биржи и цене
       
-      // Группируем возможности по уникальным комбинациям символов бирж
-      const symbolGroups = {};
-      for (const opp of group) {
-        // Создаем ключ из всех уникальных символов бирж этой возможности
-        const oppSymbols = [opp.buy_symbol, opp.sell_symbol]
-          .filter(s => s && s !== canonical)
-          .map(s => s.toUpperCase())
-          .sort()
-          .join('|');
-        
-        const symbolKey = oppSymbols || canonical;
-        
-        if (!symbolGroups[symbolKey]) {
-          symbolGroups[symbolKey] = [];
-        }
-        symbolGroups[symbolKey].push(opp);
-      }
-      
-      // Для каждой группы символов разделяем по цене
-      for (const symbolKey in symbolGroups) {
-        const symbolGroup = symbolGroups[symbolKey];
-        
-        // Вычисляем среднюю цену для этой группы символов
-        const symbolPrices = symbolGroup
-          .map(o => (o.buy_price + o.sell_price) / 2)
-          .filter(p => p > 0);
-        
-        if (symbolPrices.length === 0) {
-          // Если нет цен, используем общую среднюю
-          const groupKey = symbolKey === canonical ? canonical : `${canonical}_${symbolKey}`;
-          finalGroups[groupKey] = symbolGroup;
-          continue;
-        }
-        
-        const symbolAvgPrice = symbolPrices.reduce((a, b) => a + b, 0) / symbolPrices.length;
-        
-        // Разделяем по цене внутри группы символов
-        for (const opp of symbolGroup) {
+      // Если есть нулевые цены - разделяем по биржам с нулевыми и ненулевыми ценами
+      if (hasZeroPrice) {
+        // Группируем по наличию нулевых цен
+        const zeroPriceGroups = { zero: [], nonZero: [] };
+        for (const opp of group) {
           const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
-          let groupKey = symbolKey === canonical ? canonical : `${canonical}_${symbolKey}`;
-          
-          // Определяем диапазон цены относительно средней для этой группы символов
-          if (oppAvgPrice < symbolAvgPrice * 0.7) {
-            groupKey = `${groupKey}_low`;
-          } else if (oppAvgPrice > symbolAvgPrice * 1.3) {
-            groupKey = `${groupKey}_high`;
+          if (oppAvgPrice === 0 || opp.buy_price === 0 || opp.sell_price === 0) {
+            zeroPriceGroups.zero.push(opp);
+          } else {
+            zeroPriceGroups.nonZero.push(opp);
           }
-          
-          if (!finalGroups[groupKey]) {
-            finalGroups[groupKey] = [];
-          }
-          finalGroups[groupKey].push(opp);
         }
+        
+        // Разделяем на группы
+        if (zeroPriceGroups.zero.length > 0) {
+          finalGroups[`${canonical}_zero`] = zeroPriceGroups.zero;
+        }
+        if (zeroPriceGroups.nonZero.length > 0) {
+          // Для ненулевых цен применяем обычную логику разделения
+          const nonZeroGroup = zeroPriceGroups.nonZero;
+          const nonZeroPrices = nonZeroGroup.map(o => (o.buy_price + o.sell_price) / 2).filter(p => p > 0);
+          if (nonZeroPrices.length > 1) {
+            const nonZeroAvg = nonZeroPrices.reduce((a, b) => a + b, 0) / nonZeroPrices.length;
+            const nonZeroMin = Math.min(...nonZeroPrices);
+            const nonZeroMax = Math.max(...nonZeroPrices);
+            const nonZeroRatio = nonZeroMin > 0 ? nonZeroMax / nonZeroMin : Infinity;
+            
+            if (nonZeroRatio > 2.0) {
+              // Разделяем по цене
+              for (const opp of nonZeroGroup) {
+                const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
+                let groupKey = canonical;
+                if (oppAvgPrice < nonZeroAvg * 0.7) {
+                  groupKey = `${canonical}_low`;
+                } else if (oppAvgPrice > nonZeroAvg * 1.3) {
+                  groupKey = `${canonical}_high`;
+                }
+                if (!finalGroups[groupKey]) {
+                  finalGroups[groupKey] = [];
+                }
+                finalGroups[groupKey].push(opp);
+              }
+            } else {
+              finalGroups[canonical] = nonZeroGroup;
+            }
+          } else {
+            finalGroups[canonical] = nonZeroGroup;
+          }
+        }
+      } else {
+        // Нет нулевых цен - применяем обычную логику разделения по базовым символам
+        const baseSymbolGroups = {};
+        for (const opp of group) {
+          // Получаем все символы бирж для этой возможности
+          const allSymbols = [opp.buy_symbol, opp.sell_symbol].filter(s => s);
+          
+          // Собираем все уникальные базовые символы из этой возможности
+          const basesInOpp = new Set();
+          basesInOpp.add(baseFromCanonical); // Всегда включаем canonical
+          
+          for (const sym of allSymbols) {
+            const baseFromSym = normalizeSymbol(sym);
+            if (baseFromSym.length > 0) {
+              basesInOpp.add(baseFromSym);
+            }
+          }
+          
+          // Определяем ключ группировки:
+          // - Если есть только один базовый символ (canonical) - используем его
+          // - Если есть разные базовые символы - используем первый отличающийся от canonical
+          let baseKey = baseFromCanonical;
+          const basesArray = Array.from(basesInOpp);
+          if (basesArray.length > 1) {
+            // Есть разные базовые символы - используем первый отличающийся от canonical
+            for (const base of basesArray) {
+              if (base !== baseFromCanonical) {
+                baseKey = base;
+                break;
+              }
+            }
+          }
+          
+          if (!baseSymbolGroups[baseKey]) {
+            baseSymbolGroups[baseKey] = [];
+          }
+          baseSymbolGroups[baseKey].push(opp);
+        }
+        
+        // Для каждой группы базовых символов разделяем по цене
+        for (const baseKey in baseSymbolGroups) {
+          const baseGroup = baseSymbolGroups[baseKey];
+          
+          // Вычисляем среднюю цену для этой группы базовых символов
+          const basePrices = baseGroup
+            .map(o => (o.buy_price + o.sell_price) / 2)
+            .filter(p => p > 0);
+          
+          if (basePrices.length === 0) {
+            // Если нет цен, используем canonical как ключ
+            const groupKey = baseKey === baseFromCanonical ? canonical : `${canonical}_${baseKey}`;
+            finalGroups[groupKey] = baseGroup;
+            continue;
+          }
+          
+          const baseAvgPrice = basePrices.reduce((a, b) => a + b, 0) / basePrices.length;
+          const baseMinPrice = Math.min(...basePrices);
+          const baseMaxPrice = Math.max(...basePrices);
+          const basePriceDiff = baseAvgPrice > 0 ? (baseMaxPrice - baseMinPrice) / baseAvgPrice : 0;
+          const basePriceRatio = baseMinPrice > 0 ? baseMaxPrice / baseMinPrice : (baseMaxPrice > 0 ? Infinity : 1);
+          
+          // Если внутри группы базовых символов цены все еще сильно различаются,
+          // разделяем по диапазону цен
+          const baseIsDifferent = basePriceDiff > PRICE_DIFF_THRESHOLD || basePriceRatio > 2.0;
+          if (baseIsDifferent && baseGroup.length > 1) {
+            // Разделяем по цене
+            for (const opp of baseGroup) {
+              const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
+              let groupKey = baseKey === baseFromCanonical ? canonical : `${canonical}_${baseKey}`;
+              
+              // Определяем диапазон цены - используем более строгие пороги для агрессивного разделения
+              const lowThreshold = isAggressivelyDifferent ? 0.5 : 0.7; // 50% или 70% от средней
+              const highThreshold = isAggressivelyDifferent ? 1.5 : 1.3; // 150% или 130% от средней
+              
+              if (oppAvgPrice < baseAvgPrice * lowThreshold) {
+                groupKey = `${groupKey}_low`;
+              } else if (oppAvgPrice > baseAvgPrice * highThreshold) {
+                groupKey = `${groupKey}_high`;
+              }
+              
+              if (!finalGroups[groupKey]) {
+                finalGroups[groupKey] = [];
+              }
+              finalGroups[groupKey].push(opp);
+            }
+          } else {
+            // Цены похожи внутри группы базовых символов - одна группа
+            const groupKey = baseKey === baseFromCanonical ? canonical : `${canonical}_${baseKey}`;
+            finalGroups[groupKey] = baseGroup;
+          }
+        }
+      }
+    } else if (isSuspicious && group.length > 1) {
+      // Подозрительная разница в ценах (>30% или >1.5x) - проверяем внимательнее
+      // Если есть разные базовые символы - разделяем по ним
+      if (differentBases.length > 0) {
+        // Есть разные базовые символы - разделяем по ним
+        const baseSymbolGroups = {};
+        for (const opp of group) {
+          const allSymbols = [opp.buy_symbol, opp.sell_symbol].filter(s => s);
+          let baseKey = baseFromCanonical;
+          
+          for (const sym of allSymbols) {
+            const baseFromSym = normalizeSymbol(sym);
+            if (baseFromSym !== baseFromCanonical && baseFromSym.length > 0) {
+              baseKey = baseFromSym;
+              break;
+            }
+          }
+          
+          if (!baseSymbolGroups[baseKey]) {
+            baseSymbolGroups[baseKey] = [];
+          }
+          baseSymbolGroups[baseKey].push(opp);
+        }
+        
+        // Разделяем по базовым символам
+        for (const baseKey in baseSymbolGroups) {
+          const groupKey = baseKey === baseFromCanonical ? canonical : `${canonical}_${baseKey}`;
+          finalGroups[groupKey] = baseSymbolGroups[baseKey];
+        }
+      } else {
+        // Нет разных базовых символов, но подозрительная разница - оставляем вместе
+        // (может быть просто волатильность одной монеты)
+        finalGroups[canonical] = group;
       }
     } else {
       // Цены похожи - проверяем, есть ли разные базовые символы

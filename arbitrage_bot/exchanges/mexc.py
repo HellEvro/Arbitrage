@@ -43,8 +43,11 @@ class MexcAdapter(BaseAdapter):
             return markets
         except Exception as e:
             self._log.error("Failed to fetch MEXC markets: %s", e)
-            # Fallback: use ticker endpoint
+            # Fallback: use ticker endpoint (NOTE: ticker endpoint doesn't distinguish spot/futures)
+            # This fallback should only be used if exchangeInfo fails
+            # We can't filter by spot type here, so log a warning
             try:
+                self._log.warning("Using ticker fallback for MEXC - cannot filter spot markets reliably")
                 tickers = await self._http.get_json(f"{self._REST_BASE}/api/v3/ticker/24hr")
                 markets: list[ExchangeMarket] = []
                 seen_symbols = set()
@@ -54,6 +57,8 @@ class MexcAdapter(BaseAdapter):
                         continue
                     if not symbol.endswith("USDT"):
                         continue
+                    # NOTE: Cannot verify spot vs futures in ticker endpoint
+                    # This is a fallback only - prefer exchangeInfo endpoint
                     seen_symbols.add(symbol)
                     base = symbol.replace("USDT", "")
                     markets.append(
@@ -63,7 +68,7 @@ class MexcAdapter(BaseAdapter):
                             quote_asset="USDT",
                         )
                     )
-                self._log.info("Fetched %d USDT markets from MEXC (via ticker fallback)", len(markets))
+                self._log.warning("Fetched %d USDT markets from MEXC (via ticker fallback - may include futures)", len(markets))
                 return markets
             except Exception as e2:
                 self._log.error("Both exchangeInfo and ticker fallback failed: %s", e2)
