@@ -372,13 +372,26 @@ def create_app(
         current_aggregator = app.config.get("AGGREGATOR") or aggregator
         if not current_aggregator:
             return jsonify({})
+        
         import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        statuses = loop.run_until_complete(current_aggregator.get_exchange_status())
+        main_loop = app.config.get("MAIN_LOOP")
+        if main_loop and main_loop.is_running():
+            # Используем run_coroutine_threadsafe для выполнения в основном loop
+            future = asyncio.run_coroutine_threadsafe(
+                current_aggregator.get_exchange_status(), 
+                main_loop
+            )
+            try:
+                # Ждем результат с таймаутом
+                statuses = future.result(timeout=5.0)
+            except Exception as e:
+                log.exception("Error getting exchange status: %s", e)
+                return jsonify({"error": str(e)}), 500
+        else:
+            # Если основной loop недоступен, возвращаем пустой результат
+            log.warning("Main event loop not available, returning empty exchange status")
+            return jsonify({})
+        
         payload = {
             name: {
                 "name": status.name,
@@ -589,14 +602,25 @@ def create_app(
             """Send initial data immediately when client connects."""
             log.debug("Client connected, sending initial data")
             import asyncio as aio
-            try:
-                loop = aio.get_event_loop()
-            except RuntimeError:
-                loop = aio.new_event_loop()
-                aio.set_event_loop(loop)
             
             # Send opportunities immediately
-            opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+            main_loop = app.config.get("MAIN_LOOP")
+            if main_loop and main_loop.is_running():
+                future = aio.run_coroutine_threadsafe(arbitrage_engine.get_latest(), main_loop)
+                try:
+                    opportunities = future.result(timeout=2.0)
+                except Exception as e:
+                    log.debug("Error getting initial opportunities: %s", e)
+                    opportunities = []
+            else:
+                # Fallback: try to use current loop
+                try:
+                    loop = aio.get_event_loop()
+                    opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+                except Exception as e:
+                    log.debug("Error getting initial opportunities: %s", e)
+                    opportunities = []
+            
             payload = [asdict(opp) for opp in opportunities]
             socketio.emit("opportunities", payload)
             log.debug("Sent %d initial opportunities to client", len(payload))
@@ -604,7 +628,17 @@ def create_app(
             # Send exchange status immediately
             if aggregator:
                 try:
-                    statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                    if main_loop and main_loop.is_running():
+                        future = aio.run_coroutine_threadsafe(aggregator.get_exchange_status(), main_loop)
+                        statuses = future.result(timeout=2.0)
+                    else:
+                        try:
+                            loop = aio.get_event_loop()
+                            statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                        except RuntimeError:
+                            log.debug("Cannot get exchange status: no event loop available")
+                            statuses = {}
+                    
                     status_payload = {
                         name: {
                             "name": status.name,
@@ -624,13 +658,31 @@ def create_app(
         def emit_loop() -> None:
             log.info("Starting WebSocket emit loop")
             import asyncio as aio
-            loop = aio.new_event_loop()
-            aio.set_event_loop(loop)
             import time
+            main_loop = app.config.get("MAIN_LOOP")
             first_emit = True
             try:
                 while True:
-                    opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+                    # Get opportunities
+                    if main_loop and main_loop.is_running():
+                        future = aio.run_coroutine_threadsafe(arbitrage_engine.get_latest(), main_loop)
+                        try:
+                            opportunities = future.result(timeout=2.0)
+                        except Exception as e:
+                            log.debug("Error getting opportunities: %s", e)
+                            opportunities = []
+                    else:
+                        # Fallback: create new loop
+                        loop = aio.new_event_loop()
+                        aio.set_event_loop(loop)
+                        try:
+                            opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+                        except Exception as e:
+                            log.debug("Error getting opportunities: %s", e)
+                            opportunities = []
+                        finally:
+                            loop.close()
+                    
                     payload = [asdict(opp) for opp in opportunities]
                     if payload:
                         log.debug("Emitting %d opportunities via WebSocket", len(payload))
@@ -641,7 +693,17 @@ def create_app(
                     # Emit exchange status if aggregator is available
                     if aggregator:
                         try:
-                            statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                            if main_loop and main_loop.is_running():
+                                future = aio.run_coroutine_threadsafe(aggregator.get_exchange_status(), main_loop)
+                                statuses = future.result(timeout=2.0)
+                            else:
+                                loop = aio.new_event_loop()
+                                aio.set_event_loop(loop)
+                                try:
+                                    statuses = loop.run_until_complete(aggregator.get_exchange_status())
+                                finally:
+                                    loop.close()
+                            
                             status_payload = {
                                 name: {
                                     "name": status.name,
@@ -664,8 +726,6 @@ def create_app(
                         first_emit = False
             except Exception as e:
                 log.exception("Error in emit loop: %s", e)
-            finally:
-                loop.close()
 
         socketio.start_background_task(emit_loop)
 
