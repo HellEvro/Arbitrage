@@ -31,7 +31,17 @@ class ArbitrageEngine:
         # История стабильности: ключ = (symbol, buy_exchange, sell_exchange), значение = deque с временными метками
         self._stability_history: dict[tuple[str, str, str], deque[int]] = {}
         # Используем настройки из конфига
-        self._stable_window_ms = int(settings.filtering.stable_window_minutes * 60 * 1000)
+        self._update_filtering_settings()
+    
+    def _update_filtering_settings(self) -> None:
+        """Обновить настройки фильтрации из settings."""
+        self._stable_window_ms = int(self._settings.filtering.stable_window_minutes * 60 * 1000)
+    
+    def reload_settings(self, new_settings: Settings) -> None:
+        """Перезагрузить настройки без перезапуска."""
+        self._settings = new_settings
+        self._update_filtering_settings()
+        log.info("Filtering settings reloaded from config")
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
         snapshots = await self._quote_store.list()

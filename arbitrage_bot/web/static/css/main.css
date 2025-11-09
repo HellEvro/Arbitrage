@@ -463,12 +463,27 @@ a:hover {
   opacity: 0.7;
 }
 
+.config-item input[type="number"]:not(:read-only):focus {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+  border-color: #58a6ff;
+}
+
 .config-description {
   display: block;
-  font-size: 0.85rem;
-  color: #8b949e;
-  margin-top: 0.25rem;
-  font-style: italic;
+  font-size: 0.9rem;
+  color: #c9d1d9;
+  margin-top: 0.5rem;
+  line-height: 1.5;
+  padding: 0.75rem;
+  background-color: #161b22;
+  border-left: 3px solid #58a6ff;
+  border-radius: 4px;
+}
+
+.config-description strong {
+  color: #58a6ff;
+  font-weight: 600;
 }
 
 /* Оптимизация таблицы - все данные должны быть видны БЕЗ обрезки */

@@ -8,7 +8,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
-from arbitrage_bot.config import Settings
+from arbitrage_bot.config import Settings, load_settings, save_filtering_config
 from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
 from arbitrage_bot.services.market_discovery import MarketDiscoveryService
 from arbitrage_bot.services.quote_store import QuoteStore
@@ -26,6 +26,10 @@ def create_app(
     aggregator: "QuoteAggregator | None" = None,
 ) -> tuple[Flask, SocketIO]:
     app = Flask(__name__, static_folder="static", template_folder="templates")
+    # Сохраняем ссылки на settings и engine для использования в роутах
+    app.config["SETTINGS"] = settings
+    app.config["ARBITRAGE_ENGINE"] = arbitrage_engine
+    app.config["AGGREGATOR"] = aggregator
     cors = settings.web.cors_origins if settings else ["*"]
     # For Socket.IO, explicitly allow localhost origins
     # Flask-SocketIO: "*" = allow all, list = specific origins
@@ -56,7 +60,8 @@ def create_app(
 
     @app.route("/api/ranking")
     def ranking() -> Any:
-        if not arbitrage_engine:
+        current_engine = app.config.get("ARBITRAGE_ENGINE") or arbitrage_engine
+        if not current_engine:
             return jsonify([])
         import asyncio
         try:
@@ -64,7 +69,7 @@ def create_app(
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
+        opportunities = loop.run_until_complete(current_engine.get_latest())
         log.debug("API /ranking: got %d opportunities from engine", len(opportunities))
         payload = [
             {
@@ -89,29 +94,77 @@ def create_app(
         log.debug("API /ranking: returning %d opportunities", len(payload))
         return jsonify(payload)
 
-    @app.route("/api/filtering-config")
+    @app.route("/api/filtering-config", methods=["GET", "POST"])
     def filtering_config() -> Any:
-        """Get filtering configuration for frontend."""
-        if not settings:
+        """Get or save filtering configuration."""
+        current_settings = app.config.get("SETTINGS") or settings
+        current_engine = app.config.get("ARBITRAGE_ENGINE") or arbitrage_engine
+        
+        if request.method == "POST":
+            # Сохранение конфига
+            if not current_settings:
+                return jsonify({"error": "Settings not available"}), 500
+            
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                # Валидация данных
+                filtering_data = {
+                    "same_coin_ratio": float(data.get("same_coin_ratio", current_settings.filtering.same_coin_ratio)),
+                    "likely_same_coin_ratio": float(data.get("likely_same_coin_ratio", current_settings.filtering.likely_same_coin_ratio)),
+                    "different_coin_ratio": float(data.get("different_coin_ratio", current_settings.filtering.different_coin_ratio)),
+                    "min_price_threshold": float(data.get("min_price_threshold", current_settings.filtering.min_price_threshold)),
+                    "price_ratio_threshold": float(data.get("price_ratio_threshold", current_settings.filtering.price_ratio_threshold)),
+                    "stable_window_minutes": float(data.get("stable_window_minutes", current_settings.filtering.stable_window_minutes)),
+                    "price_diff_suspicious": float(data.get("price_diff_suspicious", current_settings.filtering.price_diff_suspicious)),
+                    "price_diff_threshold": float(data.get("price_diff_threshold", current_settings.filtering.price_diff_threshold)),
+                    "price_diff_aggressive": float(data.get("price_diff_aggressive", current_settings.filtering.price_diff_aggressive)),
+                }
+                
+                # Сохраняем в файл
+                save_filtering_config(filtering_data)
+                
+                # Перезагружаем настройки
+                new_settings = load_settings()
+                
+                # Обновляем настройки в engine без перезапуска
+                if current_engine:
+                    current_engine.reload_settings(new_settings)
+                
+                # Обновляем настройки в app.config для следующего запроса
+                app.config["SETTINGS"] = new_settings
+                
+                log.info("Filtering config saved and reloaded")
+                
+                return jsonify({"success": True, "message": "Настройки сохранены и применены"})
+            except Exception as e:
+                log.exception("Error saving filtering config: %s", e)
+                return jsonify({"error": str(e)}), 500
+        
+        # GET запрос - возвращаем текущие настройки
+        if not current_settings:
             return jsonify({})
         return jsonify({
             # Backend параметры
-            "same_coin_ratio": settings.filtering.same_coin_ratio,
-            "likely_same_coin_ratio": settings.filtering.likely_same_coin_ratio,
-            "different_coin_ratio": settings.filtering.different_coin_ratio,
-            "min_price_threshold": settings.filtering.min_price_threshold,
-            "price_ratio_threshold": settings.filtering.price_ratio_threshold,
-            "stable_window_minutes": settings.filtering.stable_window_minutes,
+            "same_coin_ratio": current_settings.filtering.same_coin_ratio,
+            "likely_same_coin_ratio": current_settings.filtering.likely_same_coin_ratio,
+            "different_coin_ratio": current_settings.filtering.different_coin_ratio,
+            "min_price_threshold": current_settings.filtering.min_price_threshold,
+            "price_ratio_threshold": current_settings.filtering.price_ratio_threshold,
+            "stable_window_minutes": current_settings.filtering.stable_window_minutes,
             # Frontend параметры
-            "price_diff_suspicious": settings.filtering.price_diff_suspicious,
-            "price_diff_threshold": settings.filtering.price_diff_threshold,
-            "price_diff_aggressive": settings.filtering.price_diff_aggressive,
+            "price_diff_suspicious": current_settings.filtering.price_diff_suspicious,
+            "price_diff_threshold": current_settings.filtering.price_diff_threshold,
+            "price_diff_aggressive": current_settings.filtering.price_diff_aggressive,
         })
 
     @app.route("/api/exchange-status")
     def exchange_status() -> Any:
         """Get status of all exchanges."""
-        if not aggregator:
+        current_aggregator = app.config.get("AGGREGATOR") or aggregator
+        if not current_aggregator:
             return jsonify({})
         import asyncio
         try:
@@ -119,7 +172,7 @@ def create_app(
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        statuses = loop.run_until_complete(aggregator.get_exchange_status())
+        statuses = loop.run_until_complete(current_aggregator.get_exchange_status())
         payload = {
             name: {
                 "name": status.name,

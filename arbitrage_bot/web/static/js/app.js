@@ -1287,6 +1287,83 @@ document.getElementById("clear-all-btn").addEventListener("click", () => {
   }
 });
 
+// Сохранение настроек фильтрации
+document.getElementById("save-filtering-config-btn")?.addEventListener("click", async () => {
+  const statusEl = document.getElementById("filtering-config-status");
+  const btn = document.getElementById("save-filtering-config-btn");
+  
+  if (!statusEl || !btn) return;
+  
+  // Собираем значения из полей
+  const config = {
+    same_coin_ratio: parseFloat(document.getElementById("same-coin-ratio")?.value || 1.10),
+    likely_same_coin_ratio: parseFloat(document.getElementById("likely-same-coin-ratio")?.value || 1.5),
+    different_coin_ratio: parseFloat(document.getElementById("different-coin-ratio")?.value || 1.5),
+    min_price_threshold: parseFloat(document.getElementById("min-price-threshold")?.value || 1e-6),
+    price_ratio_threshold: parseFloat(document.getElementById("price-ratio-threshold")?.value || 1.5),
+    stable_window_minutes: parseFloat(document.getElementById("stable-window-minutes")?.value || 5.0),
+    price_diff_suspicious: parseFloat(document.getElementById("price-diff-suspicious")?.value || 0.3),
+    price_diff_threshold: parseFloat(document.getElementById("price-diff-threshold")?.value || 1.0),
+    price_diff_aggressive: parseFloat(document.getElementById("price-diff-aggressive")?.value || 2.0),
+  };
+  
+  // Валидация
+  if (config.same_coin_ratio < 1.0 || config.likely_same_coin_ratio < 1.0 || config.different_coin_ratio < 1.0) {
+    statusEl.textContent = "❌ Ошибка: коэффициенты должны быть >= 1.0";
+    statusEl.style.color = "#f85149";
+    return;
+  }
+  
+  if (config.min_price_threshold < 0 || config.stable_window_minutes < 0) {
+    statusEl.textContent = "❌ Ошибка: пороги не могут быть отрицательными";
+    statusEl.style.color = "#f85149";
+    return;
+  }
+  
+  btn.disabled = true;
+  statusEl.textContent = "⏳ Сохранение...";
+  statusEl.style.color = "#8b949e";
+  
+  try {
+    const response = await fetch("/api/filtering-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      statusEl.textContent = "✅ " + (result.message || "Настройки сохранены и применены");
+      statusEl.style.color = "#238636";
+      
+      // Обновляем state.filteringConfig
+      state.filteringConfig = { ...state.filteringConfig, ...config };
+      
+      // Перезагружаем конфиг с сервера для подтверждения
+      setTimeout(() => {
+        loadFilteringConfig();
+      }, 500);
+    } else {
+      statusEl.textContent = "❌ Ошибка: " + (result.error || "Неизвестная ошибка");
+      statusEl.style.color = "#f85149";
+    }
+  } catch (error) {
+    statusEl.textContent = "❌ Ошибка: " + error.message;
+    statusEl.style.color = "#f85149";
+  } finally {
+    btn.disabled = false;
+    // Очищаем статус через 5 секунд
+    setTimeout(() => {
+      if (statusEl.textContent.includes("✅")) {
+        statusEl.textContent = "";
+      }
+    }, 5000);
+  }
+});
+
 // Рендеринг статуса бирж
 function renderExchangeStatus(statuses) {
   const container = document.getElementById("exchange-status-list");
