@@ -1874,7 +1874,33 @@ renderWhitelist();
           // Сохраняем оригинальную высоту заголовка ДО фиксации
           const originalHeight = thead.offsetHeight;
           
-          // Фиксируем заголовок СНАЧАЛА
+          // Сохраняем ширины всех колонок ДО фиксации
+          const columnWidths = [];
+          thElements.forEach((th, index) => {
+            const rect = th.getBoundingClientRect();
+            columnWidths[index] = rect.width;
+          });
+          
+          // Фиксируем ширину таблицы, чтобы она не менялась
+          table.style.width = tableRect.width + "px";
+          table.style.tableLayout = "fixed";
+          
+          // Создаем или обновляем colgroup для управления ширинами колонок
+          let colgroup = table.querySelector("colgroup");
+          if (!colgroup) {
+            colgroup = document.createElement("colgroup");
+            table.insertBefore(colgroup, thead);
+          }
+          // Очищаем существующие col элементы
+          colgroup.innerHTML = "";
+          // Создаем col элементы с фиксированными ширинами
+          columnWidths.forEach((width) => {
+            const col = document.createElement("col");
+            col.style.width = width + "px";
+            colgroup.appendChild(col);
+          });
+          
+          // Фиксируем заголовок
           thead.style.position = "fixed";
           thead.style.top = "0";
           thead.style.left = tableRect.left + "px";
@@ -1882,9 +1908,31 @@ renderWhitelist();
           thead.style.zIndex = "1000";
           thead.style.backgroundColor = "#161b22";
           
-          thElements.forEach((th) => {
+          // Применяем сохраненные ширины колонок к заголовку
+          thElements.forEach((th, index) => {
             th.style.backgroundColor = "#161b22";
+            th.style.width = columnWidths[index] + "px";
+            th.style.minWidth = columnWidths[index] + "px";
+            th.style.maxWidth = columnWidths[index] + "px";
+            th.style.boxSizing = "border-box";
           });
+          
+          // Применяем те же ширины к ячейкам тела таблицы
+          const tbody = table.querySelector("tbody");
+          if (tbody) {
+            const rows = tbody.querySelectorAll("tr");
+            rows.forEach((row) => {
+              const cells = row.querySelectorAll("td");
+              cells.forEach((td, index) => {
+                if (index < columnWidths.length) {
+                  td.style.width = columnWidths[index] + "px";
+                  td.style.minWidth = columnWidths[index] + "px";
+                  td.style.maxWidth = columnWidths[index] + "px";
+                  td.style.boxSizing = "border-box";
+                }
+              });
+            });
+          }
           
           // Затем создаем placeholder с ТОЧНОЙ высотой ТОЛЬКО ОДИН РАЗ
           if (!document.getElementById("thead-placeholder")) {
@@ -1904,6 +1952,7 @@ renderWhitelist();
           const currentRect = table.getBoundingClientRect();
           thead.style.left = currentRect.left + "px";
           thead.style.width = currentRect.width + "px";
+          table.style.width = currentRect.width + "px";
         }
       } else {
         // Таблица выше верха экрана или полностью прокручена - возвращаем нормальное состояние
@@ -1916,6 +1965,39 @@ renderWhitelist();
           thead.style.top = "";
           thead.style.left = "";
           thead.style.width = "";
+          
+          // Возвращаем обычную ширину таблицы
+          table.style.width = "";
+          table.style.tableLayout = "";
+          
+          // Удаляем colgroup
+          const colgroup = table.querySelector("colgroup");
+          if (colgroup) {
+            colgroup.remove();
+          }
+          
+          // Убираем фиксированные ширины колонок из заголовка
+          thElements.forEach((th) => {
+            th.style.width = "";
+            th.style.minWidth = "";
+            th.style.maxWidth = "";
+            th.style.boxSizing = "";
+          });
+          
+          // Убираем фиксированные ширины колонок из тела таблицы
+          const tbody = table.querySelector("tbody");
+          if (tbody) {
+            const rows = tbody.querySelectorAll("tr");
+            rows.forEach((row) => {
+              const cells = row.querySelectorAll("td");
+              cells.forEach((td) => {
+                td.style.width = "";
+                td.style.minWidth = "";
+                td.style.maxWidth = "";
+                td.style.boxSizing = "";
+              });
+            });
+          }
           
           isFixed = false;
         }
@@ -1952,11 +2034,73 @@ renderWhitelist();
     tryInit();
   }
   
+  // Функция для переприменения ширин колонок к новым ячейкам
+  function reapplyColumnWidths() {
+    const table = document.querySelector("#ranking-table");
+    const thead = table?.querySelector("thead");
+    const thElements = table ? Array.from(table.querySelectorAll("th")) : [];
+    
+    if (!table || !thead || thElements.length === 0) {
+      return;
+    }
+    
+    // Проверяем, зафиксирован ли заголовок (через стиль position: fixed)
+    const isHeaderFixed = thead.style.position === "fixed";
+    if (!isHeaderFixed) {
+      return;
+    }
+    
+    // Получаем сохраненные ширины из colgroup или th элементов
+    const colgroup = table.querySelector("colgroup");
+    const columnWidths = [];
+    
+    if (colgroup) {
+      const cols = colgroup.querySelectorAll("col");
+      cols.forEach((col) => {
+        const width = col.style.width;
+        if (width) {
+          columnWidths.push(parseFloat(width));
+        }
+      });
+    } else {
+      thElements.forEach((th) => {
+        const width = th.style.width;
+        if (width) {
+          columnWidths.push(parseFloat(width));
+        }
+      });
+    }
+    
+    if (columnWidths.length === 0) {
+      return;
+    }
+    
+    // Применяем ширины к новым ячейкам тела таблицы
+    const tbody = table.querySelector("tbody");
+    if (tbody) {
+      const rows = tbody.querySelectorAll("tr");
+      rows.forEach((row) => {
+        const cells = row.querySelectorAll("td");
+        cells.forEach((td, index) => {
+          if (index < columnWidths.length) {
+            td.style.width = columnWidths[index] + "px";
+            td.style.minWidth = columnWidths[index] + "px";
+            td.style.maxWidth = columnWidths[index] + "px";
+            td.style.boxSizing = "border-box";
+          }
+        });
+      });
+    }
+  }
+  
   // Переинициализируем после рендеринга таблицы
   const originalRenderOpportunities = renderOpportunities;
   renderOpportunities = function(opportunities) {
     originalRenderOpportunities(opportunities);
-    setTimeout(tryInit, 150);
+    setTimeout(() => {
+      tryInit();
+      reapplyColumnWidths();
+    }, 150);
   };
 })();
 
