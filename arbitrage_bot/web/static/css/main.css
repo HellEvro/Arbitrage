@@ -1,3 +1,5 @@
+/* html - прокрутка работает автоматически */
+
 body {
   font-family: Arial, sans-serif;
   margin: 0;
@@ -5,7 +7,7 @@ body {
   background-color: #0e1117;
   color: #e6edf3;
   overflow-x: hidden;
-  width: 100%;
+  /* Прокрутка должна быть на уровне body для работы sticky */
 }
 
 main {
@@ -14,6 +16,9 @@ main {
   padding: 1rem;
   box-sizing: border-box;
   overflow-x: hidden;
+  overflow-y: visible !important; /* КРИТИЧНО: убираем overflow-y: auto, чтобы sticky работал относительно viewport */
+  height: auto !important;
+  max-height: none !important;
 }
 
 h1 {
@@ -187,27 +192,36 @@ h2 {
 
 
 .tab-content {
-  position: relative;
+  overflow: visible;
+  position: static;
+  height: auto;
+  max-height: none;
 }
 
 .tab-pane {
   display: none;
+  overflow: visible !important; /* КРИТИЧНО: не должно быть overflow для работы sticky */
+  position: static !important; /* Убеждаемся, что нет position: relative */
 }
 
 .tab-pane.active {
   display: block;
+  overflow: visible !important; /* КРИТИЧНО: не должно быть overflow для работы sticky */
+  position: static !important; /* Убеждаемся, что нет position: relative */
 }
 
 /* Таблица */
 table {
-  width: auto;
+  width: 100%;
   min-width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate; /* КРИТИЧНО для sticky - separate вместо collapse */
+  border-spacing: 0; /* Убираем промежутки между ячейками */
   background-color: #161b22;
   border-radius: 8px;
   overflow: visible;
   table-layout: auto;
   font-size: 0.9rem;
+  display: table;
 }
 
 th,
@@ -219,15 +233,57 @@ td {
   white-space: nowrap !important;
 }
 
-th {
+/* Sticky header для таблицы - КРИТИЧНО: должен быть внутри прокручиваемого контейнера */
+#ranking-table {
+  border-collapse: separate !important; /* КРИТИЧНО для sticky - separate вместо collapse */
+  border-spacing: 0 !important;
+}
+
+/* Sticky header - ФИНАЛЬНЫЙ ПОДХОД */
+#ranking-table thead {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background-color: #161b22;
+  display: table-header-group;
+}
+
+#ranking-table thead tr {
+  background-color: #161b22;
+  display: table-row;
+}
+
+#ranking-table th {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   background-color: #161b22;
   font-weight: 600;
   color: #c9d1d9;
-  position: sticky;
-  top: 0;
-  z-index: 10;
   font-size: 0.85rem;
   padding: 0.6rem 0.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  border-bottom: 2px solid #30363d;
+  display: table-cell;
+}
+
+/* Общие стили для thead и th (fallback) */
+thead {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background-color: #161b22;
+}
+
+th {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background-color: #161b22;
 }
 
 /* Группы монет */
@@ -490,12 +546,17 @@ a:hover {
 #ranking-table {
   width: auto;
   min-width: 100%;
+  border-collapse: separate !important; /* КРИТИЧНО для sticky - separate вместо collapse */
+  border-spacing: 0 !important;
 }
 
 #ranking-table-wrapper {
   width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
+  /* УБИРАЕМ overflow-x: auto - он блокирует sticky! */
+  overflow: visible;
+  position: static;
+  transform: none;
+  will-change: auto;
 }
 
 /* Панель статуса бирж - КОМПАКТНАЯ */

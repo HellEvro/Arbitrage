@@ -1826,4 +1826,138 @@ limitSelect.value = initialLimit;
 
 renderBlacklist();
 renderWhitelist();
+
+// Sticky header с JavaScript - фиксируем заголовок при прокрутке
+(function() {
+  let scrollHandler = null;
+  let resizeHandler = null;
+  
+  function initStickyHeader() {
+    const table = document.querySelector("#ranking-table");
+    const thead = table?.querySelector("thead");
+    const thElements = table ? Array.from(table.querySelectorAll("th")) : [];
+    
+    if (!table || !thead || thElements.length === 0) {
+      return false;
+    }
+    
+    // Удаляем старые обработчики
+    if (scrollHandler) {
+      window.removeEventListener("scroll", scrollHandler);
+      window.removeEventListener("resize", resizeHandler);
+    }
+    
+    let placeholder = null;
+    let isFixed = false;
+    
+    function removePlaceholder() {
+      // Проверяем все возможные placeholder'ы и удаляем их
+      const existingPlaceholder = document.getElementById("thead-placeholder");
+      if (existingPlaceholder && existingPlaceholder.parentNode) {
+        existingPlaceholder.parentNode.removeChild(existingPlaceholder);
+      }
+      placeholder = null;
+    }
+    
+    scrollHandler = function() {
+      const tableRect = table.getBoundingClientRect();
+      const theadHeight = thead.offsetHeight;
+      
+      // Если таблица достигла верха экрана и еще не полностью прокручена
+      if (tableRect.top <= 0 && tableRect.bottom > theadHeight) {
+        if (!isFixed) {
+          isFixed = true;
+          
+          // Убеждаемся, что старый placeholder удален
+          removePlaceholder();
+          
+          // Сохраняем оригинальную высоту заголовка ДО фиксации
+          const originalHeight = thead.offsetHeight;
+          
+          // Фиксируем заголовок СНАЧАЛА
+          thead.style.position = "fixed";
+          thead.style.top = "0";
+          thead.style.left = tableRect.left + "px";
+          thead.style.width = tableRect.width + "px";
+          thead.style.zIndex = "1000";
+          thead.style.backgroundColor = "#161b22";
+          
+          thElements.forEach((th) => {
+            th.style.backgroundColor = "#161b22";
+          });
+          
+          // Затем создаем placeholder с ТОЧНОЙ высотой ТОЛЬКО ОДИН РАЗ
+          if (!document.getElementById("thead-placeholder")) {
+            placeholder = document.createElement("div");
+            placeholder.id = "thead-placeholder";
+            placeholder.style.height = originalHeight + "px";
+            placeholder.style.width = "100%";
+            placeholder.style.margin = "0";
+            placeholder.style.padding = "0";
+            placeholder.style.border = "none";
+            placeholder.style.display = "block";
+            placeholder.style.visibility = "hidden";
+            table.parentNode.insertBefore(placeholder, table);
+          }
+        } else {
+          // Обновляем позицию при изменении ширины окна
+          const currentRect = table.getBoundingClientRect();
+          thead.style.left = currentRect.left + "px";
+          thead.style.width = currentRect.width + "px";
+        }
+      } else {
+        // Таблица выше верха экрана или полностью прокручена - возвращаем нормальное состояние
+        if (isFixed) {
+          // Удаляем placeholder СРАЗУ и СИНХРОННО ПЕРЕД возвратом заголовка
+          removePlaceholder();
+          
+          // Возвращаем обычное позиционирование заголовка
+          thead.style.position = "";
+          thead.style.top = "";
+          thead.style.left = "";
+          thead.style.width = "";
+          
+          isFixed = false;
+        }
+      }
+    };
+    
+    resizeHandler = function() {
+      if (isFixed) {
+        const tableRect = table.getBoundingClientRect();
+        thead.style.left = tableRect.left + "px";
+        thead.style.width = tableRect.width + "px";
+      }
+    };
+    
+    window.addEventListener("scroll", scrollHandler, { passive: true });
+    window.addEventListener("resize", resizeHandler);
+    
+    // Вызываем сразу
+    scrollHandler();
+    
+    return true;
+  }
+  
+  // Инициализируем при загрузке
+  function tryInit() {
+    if (!initStickyHeader()) {
+      setTimeout(tryInit, 100);
+    }
+  }
+  
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryInit);
+  } else {
+    tryInit();
+  }
+  
+  // Переинициализируем после рендеринга таблицы
+  const originalRenderOpportunities = renderOpportunities;
+  renderOpportunities = function(opportunities) {
+    originalRenderOpportunities(opportunities);
+    setTimeout(tryInit, 150);
+  };
+})();
+
 fetchInitial();
