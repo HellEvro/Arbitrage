@@ -76,6 +76,7 @@ class AppRunner:
     async def _evaluation_loop(self) -> None:
         """Continuously evaluate arbitrage opportunities."""
         iteration = 0
+        last_opportunities_count = 0
         log.info("Starting evaluation loop")
         try:
             while not self._stop_event.is_set():
@@ -85,7 +86,12 @@ class AppRunner:
                         self._engine.evaluate(),
                         timeout=5.0  # Max 5 seconds for evaluation
                     )
-                    log.info("Evaluation loop iteration %d: found %d opportunities", iteration, len(opportunities))
+                    
+                    # Логируем только при изменении количества возможностей или каждые 60 секунд
+                    if len(opportunities) != last_opportunities_count or iteration % 60 == 0:
+                        if len(opportunities) > 0:
+                            log.info("Найдено арбитражных возможностей: %d", len(opportunities))
+                        last_opportunities_count = len(opportunities)
                     
                     # Уведомления не должны блокировать
                     try:

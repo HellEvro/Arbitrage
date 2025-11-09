@@ -235,9 +235,7 @@ class QuoteAggregator:
                         status.error_count = 0
                         status.last_error = None
                     
-                    unique_count = len(self._exchange_symbols[adapter.name])
-                    if unique_count > 0 and unique_count % 10 == 0:
-                        log.debug("Tracking %d unique symbols from %s", unique_count, adapter.name)
+                    # Отслеживание символов происходит без логирования для уменьшения спама
             except asyncio.CancelledError:
                 async with self._status_lock:
                     unique_count = len(self._exchange_symbols[adapter.name])

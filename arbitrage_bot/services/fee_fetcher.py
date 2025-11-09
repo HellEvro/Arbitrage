@@ -114,10 +114,10 @@ class FeeFetcher:
                         if taker > 1:
                             taker = taker / 10000
                         
-                        log.debug("MEXC fee for %s: taker=%.4f%%, maker=%.4f%%", symbol, taker*100, maker*100)
+                        # Fee information logged only when needed for debugging
                         return FeeInfo("mexc", taker, maker, symbol)
-        except Exception as e:
-            log.debug("Could not fetch MEXC fee for %s: %s", symbol, e)
+        except Exception:
+            pass
         # MEXC default: maker 0.2%, taker 0.2% for spot
         return FeeInfo("mexc", 0.002, 0.002, symbol)
     

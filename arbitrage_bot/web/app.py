@@ -58,7 +58,6 @@ def create_app(
 
     @app.route("/api/status")
     def status() -> Any:
-        log.debug("Status endpoint called")
         return jsonify({"status": "ok"})
 
     @app.route("/api/ranking")
@@ -73,7 +72,6 @@ def create_app(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         opportunities = loop.run_until_complete(current_engine.get_latest())
-        log.debug("API /ranking: got %d opportunities from engine", len(opportunities))
         payload = [
             {
                 "symbol": opp.symbol,
@@ -94,7 +92,6 @@ def create_app(
             }
             for opp in opportunities
         ]
-        log.debug("API /ranking: returning %d opportunities", len(payload))
         return jsonify(payload)
 
     @app.route("/api/filtering-config", methods=["GET", "POST"])
@@ -600,7 +597,6 @@ def create_app(
         @socketio.on("connect")
         def handle_connect() -> None:
             """Send initial data immediately when client connects."""
-            log.debug("Client connected, sending initial data")
             import asyncio as aio
             
             # Send opportunities immediately
@@ -609,21 +605,18 @@ def create_app(
                 future = aio.run_coroutine_threadsafe(arbitrage_engine.get_latest(), main_loop)
                 try:
                     opportunities = future.result(timeout=2.0)
-                except Exception as e:
-                    log.debug("Error getting initial opportunities: %s", e)
+                except Exception:
                     opportunities = []
             else:
                 # Fallback: try to use current loop
                 try:
                     loop = aio.get_event_loop()
                     opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-                except Exception as e:
-                    log.debug("Error getting initial opportunities: %s", e)
+                except Exception:
                     opportunities = []
             
             payload = [asdict(opp) for opp in opportunities]
             socketio.emit("opportunities", payload)
-            log.debug("Sent %d initial opportunities to client", len(payload))
             
             # Send exchange status immediately
             if aggregator:
@@ -636,7 +629,6 @@ def create_app(
                             loop = aio.get_event_loop()
                             statuses = loop.run_until_complete(aggregator.get_exchange_status())
                         except RuntimeError:
-                            log.debug("Cannot get exchange status: no event loop available")
                             statuses = {}
                     
                     status_payload = {
@@ -651,9 +643,8 @@ def create_app(
                         for name, status in statuses.items()
                     }
                     socketio.emit("exchange_status", status_payload)
-                    log.debug("Sent initial exchange status to client")
-                except Exception as e:
-                    log.debug("Error sending initial exchange status: %s", e)
+                except Exception:
+                    pass
 
         def emit_loop() -> None:
             log.info("Starting WebSocket emit loop")
@@ -668,8 +659,7 @@ def create_app(
                         future = aio.run_coroutine_threadsafe(arbitrage_engine.get_latest(), main_loop)
                         try:
                             opportunities = future.result(timeout=2.0)
-                        except Exception as e:
-                            log.debug("Error getting opportunities: %s", e)
+                        except Exception:
                             opportunities = []
                     else:
                         # Fallback: create new loop
@@ -677,17 +667,12 @@ def create_app(
                         aio.set_event_loop(loop)
                         try:
                             opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-                        except Exception as e:
-                            log.debug("Error getting opportunities: %s", e)
+                        except Exception:
                             opportunities = []
                         finally:
                             loop.close()
                     
                     payload = [asdict(opp) for opp in opportunities]
-                    if payload:
-                        log.debug("Emitting %d opportunities via WebSocket", len(payload))
-                    else:
-                        log.debug("Emitting empty opportunities list (no opportunities found yet)")
                     socketio.emit("opportunities", payload)
                     
                     # Emit exchange status if aggregator is available
@@ -716,8 +701,8 @@ def create_app(
                                 for name, status in statuses.items()
                             }
                             socketio.emit("exchange_status", status_payload)
-                        except Exception as e:
-                            log.debug("Error emitting exchange status: %s", e)
+                        except Exception:
+                            pass
                     
                     # Первая отправка без задержки, затем с интервалом 1 секунда
                     if not first_emit:
