@@ -51,6 +51,66 @@ function formatSymbol(symbol) {
   return symbol;
 }
 
+function formatGroupKey(groupKey) {
+  // Форматируем groupKey для отображения
+  // Примеры: 
+  // "GAMEUSDT" -> "GAME"
+  // "GAMEUSDT_GAME2_USDT" -> "GAME (GAME2)"
+  // "GAMEUSDT_low" -> "GAME (низкая цена)"
+  // "NEIROUSDT_NEIRO-USDT|NEIROUSDT_low" -> "NEIRO (NEIRO-USDT, низкая цена)"
+  
+  // Извлекаем суффикс диапазона цен
+  let priceSuffix = '';
+  if (groupKey.endsWith('_low')) {
+    priceSuffix = ' (низкая цена)';
+    groupKey = groupKey.replace(/_low$/, '');
+  } else if (groupKey.endsWith('_high')) {
+    priceSuffix = ' (высокая цена)';
+    groupKey = groupKey.replace(/_high$/, '');
+  }
+  
+  // Разделяем на canonical и символы бирж
+  const parts = groupKey.split('_');
+  if (parts.length === 1) {
+    // Только canonical symbol
+    return formatSymbol(groupKey) + priceSuffix;
+  }
+  
+  const canonical = parts[0];
+  const exchangePart = parts.slice(1).join('_');
+  
+  // Если exchangePart содержит разделитель "|", это несколько символов
+  if (exchangePart.includes('|')) {
+    const symbols = exchangePart.split('|').map(s => formatSymbol(s));
+    // Берем первый уникальный символ для отображения
+    const displaySymbol = symbols[0];
+    return `${formatSymbol(canonical)} (${displaySymbol}${priceSuffix ? ',' + priceSuffix.replace(/[()]/g, '') : ''})`;
+  }
+  
+  // Один символ биржи
+  const baseFromExchange = exchangePart
+    .toUpperCase()
+    .replace(/[-_]/g, '')
+    .replace(/USDT$/i, '');
+  
+  const baseFromCanonical = canonical
+    .toUpperCase()
+    .replace(/USDT$/i, '');
+  
+  // Если базовые символы отличаются, показываем оба
+  if (baseFromExchange !== baseFromCanonical && baseFromExchange.length > 0) {
+    return `${formatSymbol(canonical)} (${formatSymbol(exchangePart)}${priceSuffix ? ',' + priceSuffix.replace(/[()]/g, '') : ''})`;
+  }
+  
+  // Если базовые символы одинаковые, но формат разный (например NEIRO-USDT vs NEIROUSDT)
+  // и есть суффикс цены, показываем его
+  if (priceSuffix) {
+    return `${formatSymbol(canonical)}${priceSuffix}`;
+  }
+  
+  return formatSymbol(canonical) + priceSuffix;
+}
+
 function createExchangeLink(exchange, symbol) {
   if (!symbol) {
     return `<span>${exchange}</span>`;
@@ -215,18 +275,145 @@ function limitOpportunities(opportunities) {
 }
 
 function groupOpportunitiesBySymbol(opportunities) {
-  const groups = {};
+  const PRICE_DIFF_THRESHOLD = 0.5; // 50% разница в цене = разные монеты
+  
+  // Извлекаем базовый символ (без разделителей и USDT)
+  const normalizeSymbol = (sym) => {
+    if (!sym) return '';
+    return sym.toUpperCase()
+      .replace(/[-_]/g, '')
+      .replace(/USDT$/i, '');
+  };
+  
+  // Шаг 1: Группируем по canonical symbol
+  const groupsByCanonical = {};
   for (const opp of opportunities) {
-    if (!groups[opp.symbol]) {
-      groups[opp.symbol] = [];
+    if (!groupsByCanonical[opp.symbol]) {
+      groupsByCanonical[opp.symbol] = [];
     }
-    groups[opp.symbol].push(opp);
+    groupsByCanonical[opp.symbol].push(opp);
   }
+  
+  // Шаг 2: Анализируем каждую группу и разделяем при необходимости
+  const finalGroups = {};
+  
+  for (const canonical in groupsByCanonical) {
+    const group = groupsByCanonical[canonical];
+    
+    // Вычисляем цены для анализа
+    const buyPrices = group.map(o => o.buy_price).filter(p => p > 0);
+    const sellPrices = group.map(o => o.sell_price).filter(p => p > 0);
+    const allPrices = [...buyPrices, ...sellPrices];
+    
+    if (allPrices.length === 0) {
+      finalGroups[canonical] = group;
+      continue;
+    }
+    
+    const avgPrice = allPrices.reduce((a, b) => a + b, 0) / allPrices.length;
+    const minPrice = Math.min(...allPrices);
+    const maxPrice = Math.max(...allPrices);
+    const priceDiff = (maxPrice - minPrice) / avgPrice;
+    
+    const baseFromCanonical = normalizeSymbol(canonical);
+    
+    // Собираем все уникальные символы бирж из группы
+    const exchangeSymbols = new Set();
+    for (const opp of group) {
+      if (opp.buy_symbol) exchangeSymbols.add(opp.buy_symbol);
+      if (opp.sell_symbol) exchangeSymbols.add(opp.sell_symbol);
+    }
+    
+    // Проверяем, есть ли символы бирж с разными базовыми символами
+    const differentBases = [];
+    for (const exchangeSymbol of exchangeSymbols) {
+      const baseFromExchange = normalizeSymbol(exchangeSymbol);
+      if (baseFromExchange !== baseFromCanonical && baseFromExchange.length > 0 && baseFromCanonical.length > 0) {
+        differentBases.push({ symbol: exchangeSymbol, base: baseFromExchange });
+      }
+    }
+    
+    // Логика разделения:
+    // 1. Если цены сильно различаются (>50%) - это разные монеты, разделяем по цене
+    // 2. Если есть символы с разными базовыми символами И цены похожи - это одна монета (GAME и GAME2 по одной цене)
+    // 3. Если есть символы с разными базовыми символами И цены сильно различаются - это разные монеты, разделяем по символу
+    
+    if (priceDiff > PRICE_DIFF_THRESHOLD && group.length > 1) {
+      // Цены сильно различаются - это разные монеты, разделяем по символу биржи и цене
+      
+      // Группируем возможности по уникальным комбинациям символов бирж
+      const symbolGroups = {};
+      for (const opp of group) {
+        // Создаем ключ из всех уникальных символов бирж этой возможности
+        const oppSymbols = [opp.buy_symbol, opp.sell_symbol]
+          .filter(s => s && s !== canonical)
+          .map(s => s.toUpperCase())
+          .sort()
+          .join('|');
+        
+        const symbolKey = oppSymbols || canonical;
+        
+        if (!symbolGroups[symbolKey]) {
+          symbolGroups[symbolKey] = [];
+        }
+        symbolGroups[symbolKey].push(opp);
+      }
+      
+      // Для каждой группы символов разделяем по цене
+      for (const symbolKey in symbolGroups) {
+        const symbolGroup = symbolGroups[symbolKey];
+        
+        // Вычисляем среднюю цену для этой группы символов
+        const symbolPrices = symbolGroup
+          .map(o => (o.buy_price + o.sell_price) / 2)
+          .filter(p => p > 0);
+        
+        if (symbolPrices.length === 0) {
+          // Если нет цен, используем общую среднюю
+          const groupKey = symbolKey === canonical ? canonical : `${canonical}_${symbolKey}`;
+          finalGroups[groupKey] = symbolGroup;
+          continue;
+        }
+        
+        const symbolAvgPrice = symbolPrices.reduce((a, b) => a + b, 0) / symbolPrices.length;
+        
+        // Разделяем по цене внутри группы символов
+        for (const opp of symbolGroup) {
+          const oppAvgPrice = (opp.buy_price + opp.sell_price) / 2;
+          let groupKey = symbolKey === canonical ? canonical : `${canonical}_${symbolKey}`;
+          
+          // Определяем диапазон цены относительно средней для этой группы символов
+          if (oppAvgPrice < symbolAvgPrice * 0.7) {
+            groupKey = `${groupKey}_low`;
+          } else if (oppAvgPrice > symbolAvgPrice * 1.3) {
+            groupKey = `${groupKey}_high`;
+          }
+          
+          if (!finalGroups[groupKey]) {
+            finalGroups[groupKey] = [];
+          }
+          finalGroups[groupKey].push(opp);
+        }
+      }
+    } else {
+      // Цены похожи - проверяем, есть ли разные базовые символы
+      if (differentBases.length > 0) {
+        // Есть разные символы (GAME vs GAME2), но цены похожи - это одна монета
+        // Оставляем в одной группе по canonical symbol
+        finalGroups[canonical] = group;
+      } else {
+        // Все символы одинаковые и цены похожи - одна группа
+        finalGroups[canonical] = group;
+      }
+    }
+  }
+  
   // Сортируем возможности внутри каждой группы по прибыли
-  for (const symbol in groups) {
-    groups[symbol].sort((a, b) => (b.spread_usdt || 0) - (a.spread_usdt || 0));
+  for (const symbol in finalGroups) {
+    finalGroups[symbol].sort((a, b) => (b.spread_usdt || 0) - (a.spread_usdt || 0));
   }
-  return groups;
+  
+  return finalGroups;
 }
 
 function processOpportunities(opportunities) {
@@ -356,7 +543,7 @@ function renderOpportunities(opportunities) {
       : (state.expandedGroups?.includes(symbol) ?? true); // По умолчанию раскрыто
     
     // Заголовок группы
-    const displaySymbol = formatSymbol(symbol); // Убираем USDT для отображения
+      const displaySymbol = formatGroupKey(symbol); // Форматируем название группы
     html += `
       <tr class="symbol-group-header" data-symbol="${symbol}" onclick="toggleGroup('${symbol}')">
         <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
