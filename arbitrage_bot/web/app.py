@@ -195,7 +195,7 @@ def create_app(
         @socketio.on("connect")
         def handle_connect() -> None:
             """Send initial data immediately when client connects."""
-            log.debug("Client connected, sending initial data")
+            log.info("Client connected via WebSocket, sending initial data")
             import asyncio as aio
             try:
                 loop = aio.get_event_loop()
@@ -245,7 +245,7 @@ def create_app(
                         for name, status in statuses.items()
                     }
                     socketio.emit("exchange_status", status_payload)
-                    log.debug("Sent initial exchange status to client")
+                    log.info("Sent initial exchange status to client: %s", {name: s["connected"] for name, s in status_payload.items()})
                 except Exception as e:
                     log.debug("Error sending initial exchange status: %s", e)
 
@@ -256,65 +256,88 @@ def create_app(
             aio.set_event_loop(loop)
             import time
             first_emit = True
+            last_opportunities = []  # Кэш последних возможностей на случай блокировки
             try:
                 while True:
-                    opportunities = loop.run_until_complete(arbitrage_engine.get_latest())
-                    payload = [
-                        {
-                            "symbol": opp.symbol,
-                            "buy_exchange": opp.buy_exchange,
-                            "buy_price": opp.buy_price,
-                            "buy_symbol": opp.buy_symbol,
-                            "buy_fee_pct": opp.buy_fee_pct,
-                            "sell_exchange": opp.sell_exchange,
-                            "sell_price": opp.sell_price,
-                            "sell_symbol": opp.sell_symbol,
-                            "sell_fee_pct": opp.sell_fee_pct,
-                            "spread_usdt": opp.spread_usdt,
-                            "spread_pct": opp.spread_pct,
-                            "gross_profit_usdt": opp.gross_profit_usdt,
-                            "total_fees_usdt": opp.total_fees_usdt,
-                            "timestamp_ms": opp.timestamp_ms,
-                        }
-                        for opp in opportunities
-                    ]
-                    if payload:
-                        log.info("Emitting %d opportunities via WebSocket", len(payload))
-                        # Log first opportunity for debugging
-                        if len(payload) > 0:
-                            log.debug("First opportunity sample: %s", payload[0])
-                    else:
-                        log.debug("Emitting empty opportunities list (no opportunities found yet)")
-                    socketio.emit("opportunities", payload)
-                    
-                    # Emit exchange status if aggregator is available
-                    if aggregator:
+                    try:
+                        # Используем таймаут для получения данных - не ждем слишком долго
                         try:
-                            statuses = loop.run_until_complete(aggregator.get_exchange_status())
-                            status_payload = {
-                                name: {
-                                    "name": status.name,
-                                    "connected": status.connected,
-                                    "last_update_ms": status.last_update_ms,
-                                    "quote_count": status.quote_count,
-                                    "error_count": status.error_count,
-                                    "last_error": status.last_error,
-                                }
-                                for name, status in statuses.items()
+                            opportunities = loop.run_until_complete(
+                                aio.wait_for(arbitrage_engine.get_latest(), timeout=0.5)
+                            )
+                            last_opportunities = opportunities  # Обновляем кэш
+                        except aio.TimeoutError:
+                            # Если операция заняла слишком долго - используем кэш
+                            log.debug("get_latest() timeout, using cached opportunities")
+                            opportunities = last_opportunities
+                        except Exception as get_error:
+                            log.debug("Error getting latest opportunities: %s, using cache", get_error)
+                            opportunities = last_opportunities
+                        
+                        payload = [
+                            {
+                                "symbol": opp.symbol,
+                                "buy_exchange": opp.buy_exchange,
+                                "buy_price": opp.buy_price,
+                                "buy_symbol": opp.buy_symbol,
+                                "buy_fee_pct": opp.buy_fee_pct,
+                                "sell_exchange": opp.sell_exchange,
+                                "sell_price": opp.sell_price,
+                                "sell_symbol": opp.sell_symbol,
+                                "sell_fee_pct": opp.sell_fee_pct,
+                                "spread_usdt": opp.spread_usdt,
+                                "spread_pct": opp.spread_pct,
+                                "gross_profit_usdt": opp.gross_profit_usdt,
+                                "total_fees_usdt": opp.total_fees_usdt,
+                                "timestamp_ms": opp.timestamp_ms,
                             }
-                            socketio.emit("exchange_status", status_payload)
-                        except Exception as e:
-                            log.debug("Error emitting exchange status: %s", e)
-                    
-                    # Первая отправка без задержки, затем с интервалом 1 секунда
-                    if not first_emit:
+                            for opp in opportunities
+                        ]
+                        if payload:
+                            log.info("Emitting %d opportunities via WebSocket", len(payload))
+                        else:
+                            log.debug("Emitting empty opportunities list (no opportunities found yet)")
+                        # Emit to all connected clients (Flask-SocketIO emits to all by default)
+                        socketio.emit("opportunities", payload)
+                        
+                        # Emit exchange status if aggregator is available (с таймаутом)
+                        if aggregator:
+                            try:
+                                statuses = loop.run_until_complete(
+                                    aio.wait_for(aggregator.get_exchange_status(), timeout=0.3)
+                                )
+                                status_payload = {
+                                    name: {
+                                        "name": status.name,
+                                        "connected": status.connected,
+                                        "last_update_ms": status.last_update_ms,
+                                        "quote_count": status.quote_count,
+                                        "error_count": status.error_count,
+                                        "last_error": status.last_error,
+                                    }
+                                    for name, status in statuses.items()
+                                }
+                                socketio.emit("exchange_status", status_payload)
+                                log.info("Emitted exchange status: %s", {name: f"{s['connected']} ({s['quote_count']})" for name, s in status_payload.items()})
+                            except aio.TimeoutError:
+                                log.debug("get_exchange_status() timeout, skipping status update")
+                            except Exception as e:
+                                log.warning("Error emitting exchange status: %s", e, exc_info=True)
+                        
+                        # Первая отправка без задержки, затем с интервалом 1 секунда
+                        if not first_emit:
+                            time.sleep(1)
+                        else:
+                            first_emit = False
+                    except Exception as e:
+                        log.warning("Error in emit loop iteration: %s (continuing)", e)
+                        # Продолжаем работу даже при ошибке
                         time.sleep(1)
-                    else:
-                        first_emit = False
             except Exception as e:
-                log.exception("Error in emit loop: %s", e)
-            finally:
-                loop.close()
+                log.exception("Critical error in emit loop: %s", e)
+                # Пытаемся перезапустить цикл через некоторое время
+                time.sleep(5)
+                # Не закрываем loop - пусть цикл продолжается
 
         socketio.start_background_task(emit_loop)
 

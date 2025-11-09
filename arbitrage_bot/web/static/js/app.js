@@ -28,7 +28,14 @@ socket.on("connect", () => {
 });
 
 socket.on("disconnect", () => {
-  console.log("WebSocket disconnected");
+  console.log("WebSocket disconnected - attempting to reconnect...");
+  // Автоматическое переподключение через 1 секунду
+  setTimeout(() => {
+    if (!socket.connected) {
+      console.log("Reconnecting WebSocket...");
+      socket.connect();
+    }
+  }, 1000);
 });
 
 socket.on("connect_error", (error) => {
@@ -289,11 +296,151 @@ function processOpportunities(opportunities) {
 }
 
 function renderOpportunities(opportunities) {
-  console.log("Rendering opportunities:", opportunities?.length || 0);
-  
-  if (!Array.isArray(opportunities) || opportunities.length === 0) {
-    console.warn("No opportunities to render:", opportunities);
-    if (tableBody) {
+  try {
+    console.log("Rendering opportunities:", opportunities?.length || 0);
+    
+    if (!Array.isArray(opportunities) || opportunities.length === 0) {
+      console.warn("No opportunities to render:", opportunities);
+      if (tableBody) {
+        // Определяем состояние для отображения сообщения
+        let message = "Нет данных";
+        
+        // Проверяем статус бирж
+        const statuses = state.exchangeStatuses || {};
+        const exchangeNames = Object.keys(statuses);
+        
+        if (exchangeNames.length > 0) {
+          // Проверяем, все ли биржи оффлайн (0 монет или не подключены)
+          const allOffline = exchangeNames.every(name => {
+            const status = statuses[name];
+            return !status.connected || (status.quote_count === 0);
+          });
+          
+          // Проверяем, есть ли хотя бы одна биржа с данными
+          const hasAnyData = exchangeNames.some(name => {
+            const status = statuses[name];
+            return status.connected && status.quote_count > 0;
+          });
+          
+          // Проверяем, есть ли хотя бы две биржи с данными (минимум для арбитража)
+          const connectedExchanges = exchangeNames.filter(name => {
+            const status = statuses[name];
+            return status.connected && status.quote_count > 0;
+          });
+          const hasEnoughExchanges = connectedExchanges.length >= 2;
+          
+          if (allOffline) {
+            message = "Сервера недоступны";
+          } else if (!hasAnyData) {
+            // Если биржи подключены, но данных еще нет - идет загрузка
+            message = "Загрузка монет!";
+          } else if (!hasEnoughExchanges) {
+            // Если есть данные только с одной биржи - недостаточно для арбитража
+            message = "Ожидание данных с других бирж...";
+          } else {
+            // Если есть данные с нескольких бирж - показываем загрузку, пока не найдены возможности
+            // Показываем "Загрузка монет!" если биржи получают данные, но возможности еще не найдены
+            message = "Загрузка монет!";
+          }
+        } else if (!state.hasReceivedData && socket.connected) {
+          // Если статусы бирж еще не загружены, но WebSocket подключен - идет загрузка
+          message = "Идет загрузка данных...";
+        }
+        
+        tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
+      }
+      return;
+    }
+
+    if (!tableBody) {
+      console.error("Table body not found!");
+      return;
+    }
+
+    const processed = processOpportunities(opportunities);
+    
+    // processed теперь объект с группами по символам
+    const symbols = Object.keys(processed).sort((a, b) => {
+      // Сортируем группы по максимальной прибыли в группе
+      const maxA = Math.max(...processed[a].map(o => o.spread_usdt || 0));
+      const maxB = Math.max(...processed[b].map(o => o.spread_usdt || 0));
+      return maxB - maxA;
+    });
+    
+    // Применяем режим "все раскрыты/закрыты" к новым монетам
+    if (state.allGroupsExpandedMode !== undefined) {
+      // Если режим установлен, применяем его к новым монетам
+      for (const symbol of symbols) {
+        if (state.allGroupsExpandedMode) {
+          // Режим "все раскрыты" - добавляем новые монеты в expandedGroups
+          if (!state.expandedGroups.includes(symbol)) {
+            state.expandedGroups.push(symbol);
+          }
+        } else {
+          // Режим "все закрыты" - удаляем новые монеты из expandedGroups
+          const index = state.expandedGroups.indexOf(symbol);
+          if (index !== -1) {
+            state.expandedGroups.splice(index, 1);
+          }
+        }
+      }
+      // Сохраняем обновленный список
+      localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
+    }
+    
+    let html = "";
+    for (const symbol of symbols) {
+      const opps = processed[symbol];
+      const maxProfit = Math.max(...opps.map(o => o.spread_usdt || 0));
+      const groupId = `group-${symbol}`;
+      // Проверяем состояние: если режим установлен, используем его, иначе проверяем expandedGroups
+      const isExpanded = state.allGroupsExpandedMode !== undefined 
+        ? state.allGroupsExpandedMode 
+        : (state.expandedGroups?.includes(symbol) ?? true); // По умолчанию раскрыто
+      
+      // Заголовок группы
+      const displaySymbol = formatSymbol(symbol); // Убираем USDT для отображения
+      html += `
+        <tr class="symbol-group-header" data-symbol="${symbol}" onclick="toggleGroup('${symbol}')">
+          <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="group-toggle-icon" style="font-size: 0.9rem;">${isExpanded ? '▼' : '▶'}</span>
+              <strong style="font-size: 1.1rem;">${displaySymbol}</strong>
+              <span style="color: #8b949e; font-size: 0.9rem;">
+                (${opps.length} ${opps.length === 1 ? 'возможность' : opps.length < 5 ? 'возможности' : 'возможностей'}, 
+                макс. прибыль: <span class="profit">${maxProfit.toFixed(2)} USDT</span>)
+              </span>
+            </div>
+          </td>
+        </tr>
+      `;
+      
+      // Строки с возможностями (всегда рендерим, но скрываем через display если свернуто)
+      for (const opp of opps) {
+        const grossProfit = opp.gross_profit_usdt || 0;
+        const totalFees = opp.total_fees_usdt || 0;
+        const netProfit = opp.spread_usdt || 0;
+        
+        html += `
+          <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22; display: ${isExpanded ? '' : 'none'};">
+            <td style="padding-left: 2rem;">→</td>
+            <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
+            <td>${formatPrice(opp.buy_price)}</td>
+            <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+            <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
+            <td>${formatPrice(opp.sell_price)}</td>
+            <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
+            <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
+            <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
+            <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
+            <td>${opp.spread_pct.toFixed(3)}%</td>
+            <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
+          </tr>
+        `;
+      }
+    }
+    
+    if (html === "") {
       // Определяем состояние для отображения сообщения
       let message = "Нет данных";
       
@@ -308,13 +455,7 @@ function renderOpportunities(opportunities) {
           return !status.connected || (status.quote_count === 0);
         });
         
-        // Проверяем, есть ли хотя бы одна биржа с данными
-        const hasAnyData = exchangeNames.some(name => {
-          const status = statuses[name];
-          return status.connected && status.quote_count > 0;
-        });
-        
-        // Проверяем, есть ли хотя бы две биржи с данными (минимум для арбитража)
+        // Проверяем, есть ли хотя бы две биржи с данными
         const connectedExchanges = exchangeNames.filter(name => {
           const status = statuses[name];
           return status.connected && status.quote_count > 0;
@@ -323,154 +464,28 @@ function renderOpportunities(opportunities) {
         
         if (allOffline) {
           message = "Сервера недоступны";
-        } else if (!hasAnyData) {
-          // Если биржи подключены, но данных еще нет - идет загрузка
-          message = "Загрузка монет!";
         } else if (!hasEnoughExchanges) {
-          // Если есть данные только с одной биржи - недостаточно для арбитража
           message = "Ожидание данных с других бирж...";
         } else {
-          // Если есть данные с нескольких бирж - показываем загрузку, пока не найдены возможности
-          // Показываем "Загрузка монет!" если биржи получают данные, но возможности еще не найдены
+          // Если есть данные с нескольких бирж, но после фильтрации нет возможностей - показываем загрузку
           message = "Загрузка монет!";
         }
-      } else if (!state.hasReceivedData && socket.connected) {
-        // Если статусы бирж еще не загружены, но WebSocket подключен - идет загрузка
-        message = "Идет загрузка данных...";
       }
       
-      tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
-    }
-    return;
-  }
-
-  if (!tableBody) {
-    console.error("Table body not found!");
-    return;
-  }
-
-  const processed = processOpportunities(opportunities);
-  
-  // processed теперь объект с группами по символам
-  const symbols = Object.keys(processed).sort((a, b) => {
-    // Сортируем группы по максимальной прибыли в группе
-    const maxA = Math.max(...processed[a].map(o => o.spread_usdt || 0));
-    const maxB = Math.max(...processed[b].map(o => o.spread_usdt || 0));
-    return maxB - maxA;
-  });
-  
-  // Применяем режим "все раскрыты/закрыты" к новым монетам
-  if (state.allGroupsExpandedMode !== undefined) {
-    // Если режим установлен, применяем его к новым монетам
-    for (const symbol of symbols) {
-      if (state.allGroupsExpandedMode) {
-        // Режим "все раскрыты" - добавляем новые монеты в expandedGroups
-        if (!state.expandedGroups.includes(symbol)) {
-          state.expandedGroups.push(symbol);
-        }
-      } else {
-        // Режим "все закрыты" - удаляем новые монеты из expandedGroups
-        const index = state.expandedGroups.indexOf(symbol);
-        if (index !== -1) {
-          state.expandedGroups.splice(index, 1);
-        }
-      }
-    }
-    // Сохраняем обновленный список
-    localStorage.setItem("arbitrage_expandedGroups", JSON.stringify(state.expandedGroups));
-  }
-  
-  let html = "";
-  for (const symbol of symbols) {
-    const opps = processed[symbol];
-    const maxProfit = Math.max(...opps.map(o => o.spread_usdt || 0));
-    const groupId = `group-${symbol}`;
-    // Проверяем состояние: если режим установлен, используем его, иначе проверяем expandedGroups
-    const isExpanded = state.allGroupsExpandedMode !== undefined 
-      ? state.allGroupsExpandedMode 
-      : (state.expandedGroups?.includes(symbol) ?? true); // По умолчанию раскрыто
-    
-    // Заголовок группы
-    const displaySymbol = formatSymbol(symbol); // Убираем USDT для отображения
-    html += `
-      <tr class="symbol-group-header" data-symbol="${symbol}" onclick="toggleGroup('${symbol}')">
-        <td colspan="12" style="background-color: #21262d; cursor: pointer; user-select: none;">
-          <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <span class="group-toggle-icon" style="font-size: 0.9rem;">${isExpanded ? '▼' : '▶'}</span>
-            <strong style="font-size: 1.1rem;">${displaySymbol}</strong>
-            <span style="color: #8b949e; font-size: 0.9rem;">
-              (${opps.length} ${opps.length === 1 ? 'возможность' : opps.length < 5 ? 'возможности' : 'возможностей'}, 
-              макс. прибыль: <span class="profit">${maxProfit.toFixed(2)} USDT</span>)
-            </span>
-          </div>
-        </td>
-      </tr>
-    `;
-    
-    // Строки с возможностями (всегда рендерим, но скрываем через display если свернуто)
-    for (const opp of opps) {
-      const grossProfit = opp.gross_profit_usdt || 0;
-      const totalFees = opp.total_fees_usdt || 0;
-      const netProfit = opp.spread_usdt || 0;
-      
-      html += `
-        <tr class="symbol-group-row" data-group="${symbol}" style="background-color: #161b22; display: ${isExpanded ? '' : 'none'};">
-          <td style="padding-left: 2rem;">→</td>
-          <td>${createExchangeLink(opp.buy_exchange, opp.buy_symbol || opp.symbol)}</td>
-          <td>${formatPrice(opp.buy_price)}</td>
-          <td><span class="fee-badge">${opp.buy_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-          <td>${createExchangeLink(opp.sell_exchange, opp.sell_symbol || opp.symbol)}</td>
-          <td>${formatPrice(opp.sell_price)}</td>
-          <td><span class="fee-badge">${opp.sell_fee_pct?.toFixed(3) || "0.100"}%</span></td>
-          <td><span class="gross-profit">${grossProfit.toFixed(2)}</span></td>
-          <td><span class="fees-amount">-${totalFees.toFixed(2)}</span></td>
-          <td><strong class="profit">${netProfit.toFixed(2)}</strong></td>
-          <td>${opp.spread_pct.toFixed(3)}%</td>
-          <td>${new Date(opp.timestamp_ms).toLocaleTimeString()}</td>
-        </tr>
-      `;
-    }
-  }
-  
-  if (html === "") {
-    // Определяем состояние для отображения сообщения
-    let message = "Нет данных";
-    
-    // Проверяем статус бирж
-    const statuses = state.exchangeStatuses || {};
-    const exchangeNames = Object.keys(statuses);
-    
-    if (exchangeNames.length > 0) {
-      // Проверяем, все ли биржи оффлайн (0 монет или не подключены)
-      const allOffline = exchangeNames.every(name => {
-        const status = statuses[name];
-        return !status.connected || (status.quote_count === 0);
-      });
-      
-      // Проверяем, есть ли хотя бы две биржи с данными
-      const connectedExchanges = exchangeNames.filter(name => {
-        const status = statuses[name];
-        return status.connected && status.quote_count > 0;
-      });
-      const hasEnoughExchanges = connectedExchanges.length >= 2;
-      
-      if (allOffline) {
-        message = "Сервера недоступны";
-      } else if (!hasEnoughExchanges) {
-        message = "Ожидание данных с других бирж...";
-      } else {
-        // Если есть данные с нескольких бирж, но после фильтрации нет возможностей - показываем загрузку
-        message = "Загрузка монет!";
-      }
+      html = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
     }
     
-    html = `<tr><td colspan='12' style='text-align: center;'>${message}</td></tr>`;
+    tableBody.innerHTML = html;
+    
+    // Обновляем иконки раскрытия после рендеринга
+    updateGroupIcons();
+  } catch (error) {
+    console.error("Error in renderOpportunities:", error);
+    // Продолжаем работу даже при ошибке - показываем сообщение об ошибке
+    if (tableBody) {
+      tableBody.innerHTML = `<tr><td colspan='12' style='text-align: center; color: red;'>Ошибка отображения данных: ${error.message}</td></tr>`;
+    }
   }
-  
-  tableBody.innerHTML = html;
-  
-  // Обновляем иконки раскрытия после рендеринга
-  updateGroupIcons();
 }
 
 function toggleGroup(symbol) {
@@ -591,22 +606,51 @@ function updateGroupIcons() {
 window.toggleGroup = toggleGroup;
 window.toggleAllGroups = toggleAllGroups;
 
+// Счетчик полученных сообщений для отладки
+let opportunitiesReceivedCount = 0;
+let lastOpportunitiesTime = Date.now();
+
 socket.on("opportunities", (data) => {
-  if (state.frozen) {
-    return; // Не обновляем, если зафиксировано
+  try {
+    if (state.frozen) {
+      return; // Не обновляем, если зафиксировано
+    }
+    opportunitiesReceivedCount++;
+    lastOpportunitiesTime = Date.now();
+    console.log(`Received opportunities #${opportunitiesReceivedCount} via WebSocket:`, data?.length || 0, "opportunities");
+    if (data && data.length > 0) {
+      if (opportunitiesReceivedCount <= 5 || opportunitiesReceivedCount % 10 === 0) {
+        console.log("First opportunity sample:", data[0]);
+      }
+    }
+    state.opportunities = data || [];
+    state.hasReceivedData = true; // Отмечаем, что данные получены
+    renderOpportunities(state.opportunities);
+  } catch (error) {
+    console.error("Error processing opportunities:", error);
+    // Продолжаем работу даже при ошибке
   }
-  console.log("Received opportunities via WebSocket:", data?.length || 0, "opportunities");
-  if (data && data.length > 0) {
-    console.log("First opportunity sample:", data[0]);
-  }
-  state.opportunities = data || [];
-  state.hasReceivedData = true; // Отмечаем, что данные получены
-  renderOpportunities(state.opportunities);
 });
+
+// Периодическая проверка соединения и получения данных
+setInterval(() => {
+  const timeSinceLastUpdate = Date.now() - lastOpportunitiesTime;
+  if (timeSinceLastUpdate > 5000 && socket.connected) {
+    console.warn(`No opportunities received for ${Math.round(timeSinceLastUpdate / 1000)} seconds. WebSocket connected: ${socket.connected}`);
+  }
+  if (!socket.connected) {
+    console.warn("WebSocket disconnected - attempting to reconnect...");
+    socket.connect();
+  }
+}, 5000); // Проверяем каждые 5 секунд
 
 // Обработка статуса бирж
 socket.on("exchange_status", (statuses) => {
   console.log("Received exchange status:", statuses);
+  if (!statuses || Object.keys(statuses).length === 0) {
+    console.warn("Empty exchange status received");
+    return;
+  }
   state.exchangeStatuses = statuses || {}; // Сохраняем статусы в state
   renderExchangeStatus(statuses);
   // Перерисовываем таблицу, чтобы обновить сообщение о статусе

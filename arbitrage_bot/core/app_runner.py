@@ -71,15 +71,40 @@ class AppRunner:
 
     async def _evaluation_loop(self) -> None:
         """Continuously evaluate arbitrage opportunities."""
+        iteration = 0
+        log.info("Starting evaluation loop")
         try:
             while not self._stop_event.is_set():
-                opportunities = await self._engine.evaluate()
-                await self._notifier.notify(opportunities)
+                iteration += 1
+                try:
+                    log.debug("Evaluation loop iteration %d: calling engine.evaluate()", iteration)
+                    opportunities = await self._engine.evaluate()
+                    log.debug("Evaluation loop iteration %d: engine.evaluate() returned %d opportunities", iteration, len(opportunities))
+                    
+                    # Уведомления не должны блокировать - делаем их неблокирующими
+                    try:
+                        await asyncio.wait_for(self._notifier.notify(opportunities), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        log.debug("Notification timeout (non-critical)")
+                    except Exception as notify_error:
+                        log.debug("Notification error (non-critical): %s", notify_error)
+                    
+                    # Логируем каждую итерацию для отладки
+                    log.info("Evaluation loop iteration %d: found %d opportunities", iteration, len(opportunities))
+                except Exception as eval_error:
+                    log.warning("Error in evaluation iteration %d: %s (continuing)", iteration, eval_error, exc_info=True)
+                    # Продолжаем работу даже при ошибке
+                log.debug("Evaluation loop iteration %d: sleeping for 1 second", iteration)
                 await asyncio.sleep(1)
+                log.debug("Evaluation loop iteration %d: woke up", iteration)
         except asyncio.CancelledError:
+            log.info("Evaluation loop cancelled after %d iterations", iteration)
             return
         except Exception as e:
-            log.exception("Error in evaluation loop: %s", e)
+            log.exception("Critical error in evaluation loop: %s", e)
+            # Пытаемся перезапустить цикл через некоторое время
+            await asyncio.sleep(5)
+            # Не закрываем цикл - пусть продолжается
 
     async def _discovery_loop(self) -> None:
         """Periodically refresh market discovery."""

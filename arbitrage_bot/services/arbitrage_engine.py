@@ -29,6 +29,7 @@ class ArbitrageEngine:
         self._latest: list[ArbitrageOpportunity] = []
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
+        # КРИТИЧНО: list() теперь НЕ блокируется - чтение полностью независимо от записи!
         snapshots = await self._quote_store.list()
         snapshot_list = list(snapshots)
         log.debug("Evaluating %d quote snapshots", len(snapshot_list))

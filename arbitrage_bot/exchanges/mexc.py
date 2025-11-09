@@ -239,7 +239,15 @@ class MexcAdapter(BaseAdapter):
                 if (current_time - self._last_403_time) < self._403_cooldown:
                     wait_time = self._403_cooldown - (current_time - self._last_403_time)
                     self._log.debug("MEXC still in 403 cooldown, waiting %.1f seconds", wait_time)
-                    await asyncio.sleep(min(wait_time, 60.0))  # Wait up to 60 seconds at a time
+                    # Ждем меньшими порциями, чтобы не блокировать поток слишком долго
+                    # И периодически проверяем, не закрыт ли адаптер
+                    waited = 0.0
+                    while waited < wait_time and not self.closed:
+                        sleep_time = min(5.0, wait_time - waited)  # Максимум 5 секунд за раз
+                        await asyncio.sleep(sleep_time)
+                        waited += sleep_time
+                    if self.closed:
+                        break
                     continue
                 
                 # Ensure cookies are fresh before each request
@@ -290,12 +298,15 @@ class MexcAdapter(BaseAdapter):
                     consecutive_403_errors += 1
                     self._successful_requests = 0  # Reset success counter on 403
                     
-                    # Увеличиваем базовую задержку при 403
-                    self._request_delay = min(self._request_delay * 1.5, 10.0)  # Максимум 10 секунд
+                    # Увеличиваем базовую задержку при 403, но не слишком сильно
+                    self._request_delay = min(self._request_delay * 1.2, 5.0)  # Максимум 5 секунд
                     
                     # Refresh cookies on 403 - they might have expired
-                    self._cookies_initialized = False
-                    await self._ensure_cookies()
+                    try:
+                        self._cookies_initialized = False
+                        await self._ensure_cookies()
+                    except Exception as cookie_error:
+                        self._log.debug("Failed to refresh cookies: %s (non-critical)", cookie_error)
                     
                     if consecutive_403_errors >= max_403_errors:
                         self._log.warning(
@@ -308,7 +319,7 @@ class MexcAdapter(BaseAdapter):
                         # Don't wait here - let cooldown check handle it
                         consecutive_403_errors = 0  # Reset after reaching max
                     else:
-                        wait_time = self._request_delay * (consecutive_403_errors + 1)
+                        wait_time = min(self._request_delay * (consecutive_403_errors + 1), 10.0)  # Максимум 10 секунд
                         self._log.warning(
                             "MEXC returned 403 Forbidden (consecutive: %d/%d). Request delay increased to %.1f seconds. Waiting %.1f seconds.",
                             consecutive_403_errors,
@@ -316,29 +327,50 @@ class MexcAdapter(BaseAdapter):
                             self._request_delay,
                             wait_time
                         )
-                        await asyncio.sleep(wait_time)  # Exponential backoff
+                        # Ждем меньшими порциями, чтобы не блокировать поток слишком долго
+                        waited = 0.0
+                        while waited < wait_time and not self.closed:
+                            sleep_time = min(2.0, wait_time - waited)  # Максимум 2 секунды за раз
+                            await asyncio.sleep(sleep_time)
+                            waited += sleep_time
+                        if self.closed:
+                            break
                 else:
                     consecutive_403_errors = 0  # Reset on non-403 errors
-                    self._log.error("Failed to fetch quotes from MEXC: %s", e)
-                    await asyncio.sleep(self._poll_interval)
+                    self._log.warning("Failed to fetch quotes from MEXC: %s (will retry)", e)
+                    # Небольшая задержка перед повтором при не-403 ошибках
+                    await asyncio.sleep(min(self._poll_interval, 2.0))
                 continue
-            ts = int(time.time() * 1000)
-            
-            # ticker/24hr returns a list of tickers
+            # ticker/24hr returns a list of tickers (2348 тикеров)
             items = data if isinstance(data, list) else []
             
+            # КРИТИЧНО: Фильтруем ТОЛЬКО watched символы! Не все спотовые пары!
+            quote_count = 0
             for item in items:
-                symbol = item.get("symbol", "").upper()
+                symbol_raw = item.get("symbol")
+                if not symbol_raw:
+                    continue
+                symbol = symbol_raw.upper()
+                
+                # КРИТИЧНО: Обрабатываем ТОЛЬКО watched символы!
                 if symbol not in watched:
                     continue
                 
-                # ticker/24hr has bidPrice and askPrice fields
                 bid = self._to_float(item.get("bidPrice"))
                 ask = self._to_float(item.get("askPrice"))
                 
-                if bid <= 0 or ask <= 0:
-                    continue
-                yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
+                if bid > 0 and ask > 0:
+                    close_time = item.get("closeTime")
+                    if close_time and isinstance(close_time, (int, float)):
+                        ts = int(close_time)
+                    else:
+                        ts = int(time.time() * 1000)
+                    
+                    yield ExchangeQuote(symbol=symbol, bid=bid, ask=ask, timestamp_ms=ts)
+                    quote_count += 1
+            
+            if quote_count > 0:
+                self._log.debug("MEXC: processed %d quotes from %d tickers (watched: %d)", quote_count, len(items), len(watched))
             
             await self.wait_interval()
 
