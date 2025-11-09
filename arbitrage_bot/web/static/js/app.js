@@ -40,7 +40,7 @@ const tradeUrlResolvers = {
   mexc: (symbol) => `https://www.mexc.com/ru-RU/exchange/${symbol}`,
   bitget: (symbol) => `https://www.bitget.com/ru-RU/spot/${symbol}`,
   okx: (symbol) => `https://www.okx.com/ru-RU/trade-spot/${symbol}`,
-  kucoin: (symbol) => `https://www.kucoin.com/ru-RU/trade/${symbol}`,
+  kucoin: (symbol) => `https://www.kucoin.com/trade/${symbol}`,
 };
 
 function formatSymbol(symbol) {
@@ -52,14 +52,34 @@ function formatSymbol(symbol) {
 }
 
 function createExchangeLink(exchange, symbol) {
-  // Разделяем символ на BASE/USDT для правильных ссылок
-  let urlSymbol = symbol;
-  if (symbol && symbol.toUpperCase().endsWith("USDT")) {
-    const base = symbol.slice(0, -4);
+  if (!symbol) {
+    return `<span>${exchange}</span>`;
+  }
+  
+  const exchangeLower = exchange.toLowerCase();
+  let urlSymbol = symbol.toUpperCase();
+  
+  // Если символ уже содержит дефис (например "ACE-USDT" для KuCoin), используем его напрямую
+  if (urlSymbol.includes("-")) {
+    // Для KuCoin и OKX формат уже правильный "ACE-USDT"
+    if (exchangeLower === "kucoin" || exchangeLower === "okx") {
+      urlSymbol = urlSymbol; // Уже правильный формат
+    } else if (exchangeLower === "bybit") {
+      // Bybit использует формат "ACE/USDT"
+      urlSymbol = urlSymbol.replace("-", "/");
+    } else if (exchangeLower === "mexc") {
+      // MEXC использует формат "ACE_USDT"
+      urlSymbol = urlSymbol.replace("-", "_");
+    } else if (exchangeLower === "bitget") {
+      // Bitget использует формат без разделителя "ACEUSDT"
+      urlSymbol = urlSymbol.replace("-", "");
+    }
+  } else if (urlSymbol.endsWith("USDT")) {
+    // Символ без дефиса (например "ACEUSDT") - преобразуем согласно формату биржи
+    const base = urlSymbol.slice(0, -4);
     const quote = "USDT";
     
-    // Формируем правильные ссылки для каждой биржи
-    switch (exchange.toLowerCase()) {
+    switch (exchangeLower) {
       case "bybit":
         urlSymbol = `${base}/${quote}`;
         break;
@@ -67,7 +87,7 @@ function createExchangeLink(exchange, symbol) {
         urlSymbol = `${base}_${quote}`;
         break;
       case "bitget":
-        urlSymbol = symbol; // Bitget использует формат без разделителя
+        urlSymbol = urlSymbol; // Bitget использует формат без разделителя
         break;
       case "okx":
         urlSymbol = `${base}-${quote}`;
@@ -80,7 +100,7 @@ function createExchangeLink(exchange, symbol) {
     }
   }
   
-  const resolver = tradeUrlResolvers[exchange.toLowerCase()];
+  const resolver = tradeUrlResolvers[exchangeLower];
   const url = resolver ? resolver(urlSymbol) : `https://${exchange}.com/trade/${urlSymbol}`;
   return `<a href="${url}" target="_blank" rel="noopener noreferrer">${exchange}</a>`;
 }
