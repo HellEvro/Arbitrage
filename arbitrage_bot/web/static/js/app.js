@@ -1,14 +1,33 @@
 const socket = io();
 const tableBody = document.querySelector("#ranking-table tbody");
 
+// Функция нормализации старых данных (строки) в новый формат (объекты)
+function normalizeListItems(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items.map(item => {
+    if (typeof item === 'string') {
+      // Старый формат: просто строка
+      return { symbol: item.toUpperCase().trim(), exchange: null };
+    }
+    // Новый формат: объект {symbol, exchange}
+    return {
+      symbol: (item.symbol || String(item)).toUpperCase().trim(),
+      exchange: item.exchange ? item.exchange.toLowerCase() : null
+    };
+  });
+}
+
 // Состояние приложения
 const state = {
   opportunities: [],
   frozen: false,
-  blacklist: JSON.parse(localStorage.getItem("arbitrage_blacklist") || "[]"),
-  whitelist: JSON.parse(localStorage.getItem("arbitrage_whitelist") || "[]"),
+  blacklist: normalizeListItems(JSON.parse(localStorage.getItem("arbitrage_blacklist") || "[]")),
+  whitelist: normalizeListItems(JSON.parse(localStorage.getItem("arbitrage_whitelist") || "[]")),
   limit: localStorage.getItem("arbitrage_limit") || "20", // Всегда строка для совместимости с select
   exchangeConfig: {},
+  availableExchanges: ["bybit", "mexc", "bitget", "okx", "kucoin"], // Список доступных бирж
   sortBy: localStorage.getItem("arbitrage_sortBy") || "spread_usdt",
   enableBlacklist: localStorage.getItem("arbitrage_enableBlacklist") !== "false",
   enableWhitelist: localStorage.getItem("arbitrage_enableWhitelist") === "true",
@@ -417,92 +436,137 @@ function filterOpportunities(opportunities) {
 
   // Применить черный список
   if (state.enableBlacklist && state.blacklist.length > 0) {
-    const beforeBlacklist = filtered.length;
-    // Создаем Set для быстрого поиска, поддерживая оба формата: MERL и MERLUSDT
-    const blacklistSet = new Set();
-    state.blacklist.forEach((s) => {
-      const upper = s.toUpperCase().trim();
-      blacklistSet.add(upper);
-      // Если символ не заканчивается на USDT, добавляем также вариант с USDT
-      if (!upper.endsWith("USDT")) {
-        blacklistSet.add(upper + "USDT");
-      }
-      // Если символ заканчивается на USDT, добавляем также вариант без USDT
-      if (upper.endsWith("USDT")) {
-        blacklistSet.add(upper.slice(0, -4)); // Убираем "USDT"
-      }
-    });
     
     filtered = filtered.filter((opp) => {
-      const symbolUpper = opp.symbol.toUpperCase();
-      // Проверяем полное совпадение
-      const isBlacklisted = blacklistSet.has(symbolUpper);
-      // Также проверяем base_asset если есть
-      let isBlacklistedByBase = false;
-      if (opp.base_asset) {
-        const baseUpper = opp.base_asset.toUpperCase();
-        isBlacklistedByBase = blacklistSet.has(baseUpper) || blacklistSet.has(baseUpper + "USDT");
+      // Проверяем каждую запись в черном списке
+      for (const item of state.blacklist) {
+        const itemSymbol = item.symbol.toUpperCase();
+        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        
+        // Проверяем совпадение символа
+        let symbolMatches = false;
+        const symbolUpper = opp.symbol.toUpperCase();
+        
+        // Проверяем прямое совпадение символа
+        if (symbolUpper === itemSymbol) {
+          symbolMatches = true;
+        }
+        // Проверяем варианты с USDT
+        else if (!itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol + "USDT") {
+          symbolMatches = true;
+        }
+        else if (itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol.slice(0, -4)) {
+          symbolMatches = true;
+        }
+        // Проверяем base_asset
+        else if (opp.base_asset) {
+          const baseUpper = opp.base_asset.toUpperCase();
+          if (baseUpper === itemSymbol || baseUpper + "USDT" === itemSymbol || baseUpper === itemSymbol.slice(0, -4)) {
+            symbolMatches = true;
+          }
+        }
+        
+        if (symbolMatches) {
+          // Если биржа не указана в черном списке, фильтруем на всех биржах
+          if (!itemExchange) {
+            return false; // Исключаем эту возможность
+          }
+          // Если биржа указана, проверяем совпадение с биржами в возможности
+          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
+            return false; // Исключаем эту возможность
+          }
+        }
       }
-      
-      if (isBlacklisted || isBlacklistedByBase) {
-        console.log("[FILTER] Blacklisted:", symbolUpper, "base:", opp.base_asset, "matched:", isBlacklisted ? "symbol" : "base");
-      }
-      return !(isBlacklisted || isBlacklistedByBase);
+      return true; // Не в черном списке
     });
-    console.log("[FILTER] After blacklist:", filtered.length, "removed:", beforeBlacklist - filtered.length, "blacklist:", state.blacklist);
   }
 
   // Применить белый список
   if (state.enableWhitelist && state.whitelist.length > 0) {
-    const beforeWhitelist = filtered.length;
-    // Создаем Set для быстрого поиска, поддерживая оба формата: MERL и MERLUSDT
-    const whitelistSet = new Set();
-    state.whitelist.forEach((s) => {
-      const upper = s.toUpperCase().trim();
-      whitelistSet.add(upper);
-      // Если символ не заканчивается на USDT, добавляем также вариант с USDT
-      if (!upper.endsWith("USDT")) {
-        whitelistSet.add(upper + "USDT");
+    const whitelisted = filtered.filter((opp) => {
+      // Проверяем каждую запись в белом списке
+      for (const item of state.whitelist) {
+        const itemSymbol = item.symbol.toUpperCase();
+        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        
+        // Проверяем совпадение символа
+        let symbolMatches = false;
+        const symbolUpper = opp.symbol.toUpperCase();
+        
+        // Проверяем прямое совпадение символа
+        if (symbolUpper === itemSymbol) {
+          symbolMatches = true;
+        }
+        // Проверяем варианты с USDT
+        else if (!itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol + "USDT") {
+          symbolMatches = true;
+        }
+        else if (itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol.slice(0, -4)) {
+          symbolMatches = true;
+        }
+        // Проверяем base_asset
+        else if (opp.base_asset) {
+          const baseUpper = opp.base_asset.toUpperCase();
+          if (baseUpper === itemSymbol || baseUpper + "USDT" === itemSymbol || baseUpper === itemSymbol.slice(0, -4)) {
+            symbolMatches = true;
+          }
+        }
+        
+        if (symbolMatches) {
+          // Если биржа не указана в белом списке, разрешаем на всех биржах
+          if (!itemExchange) {
+            return true; // Включаем эту возможность
+          }
+          // Если биржа указана, проверяем совпадение с биржами в возможности
+          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
+            return true; // Включаем эту возможность
+          }
+        }
       }
-      // Если символ заканчивается на USDT, добавляем также вариант без USDT
-      if (upper.endsWith("USDT")) {
-        whitelistSet.add(upper.slice(0, -4)); // Убираем "USDT"
-      }
+      return false; // Не в белом списке
     });
     
-    const whitelisted = filtered.filter((opp) => {
-      const symbolUpper = opp.symbol.toUpperCase();
-      // Проверяем полное совпадение
-      const isWhitelisted = whitelistSet.has(symbolUpper);
-      // Также проверяем base_asset если есть
-      let isWhitelistedByBase = false;
-      if (opp.base_asset) {
-        const baseUpper = opp.base_asset.toUpperCase();
-        isWhitelistedByBase = whitelistSet.has(baseUpper) || whitelistSet.has(baseUpper + "USDT");
-      }
-      
-      if (isWhitelisted || isWhitelistedByBase) {
-        console.log("[FILTER] Whitelisted:", symbolUpper, "base:", opp.base_asset, "matched:", isWhitelisted ? "symbol" : "base");
-      }
-      return isWhitelisted || isWhitelistedByBase;
-    });
     const others = filtered.filter((opp) => {
-      const symbolUpper = opp.symbol.toUpperCase();
-      const isWhitelisted = whitelistSet.has(symbolUpper);
-      let isWhitelistedByBase = false;
-      if (opp.base_asset) {
-        const baseUpper = opp.base_asset.toUpperCase();
-        isWhitelistedByBase = whitelistSet.has(baseUpper) || whitelistSet.has(baseUpper + "USDT");
+      // Проверяем, не в белом списке ли эта возможность
+      for (const item of state.whitelist) {
+        const itemSymbol = item.symbol.toUpperCase();
+        const itemExchange = item.exchange ? item.exchange.toLowerCase() : null;
+        
+        let symbolMatches = false;
+        const symbolUpper = opp.symbol.toUpperCase();
+        
+        if (symbolUpper === itemSymbol) {
+          symbolMatches = true;
+        }
+        else if (!itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol + "USDT") {
+          symbolMatches = true;
+        }
+        else if (itemSymbol.endsWith("USDT") && symbolUpper === itemSymbol.slice(0, -4)) {
+          symbolMatches = true;
+        }
+        else if (opp.base_asset) {
+          const baseUpper = opp.base_asset.toUpperCase();
+          if (baseUpper === itemSymbol || baseUpper + "USDT" === itemSymbol || baseUpper === itemSymbol.slice(0, -4)) {
+            symbolMatches = true;
+          }
+        }
+        
+        if (symbolMatches) {
+          if (!itemExchange) {
+            return false; // В белом списке
+          }
+          if (itemExchange === opp.buy_exchange?.toLowerCase() || itemExchange === opp.sell_exchange?.toLowerCase()) {
+            return false; // В белом списке
+          }
+        }
       }
-      return !(isWhitelisted || isWhitelistedByBase);
+      return true; // Не в белом списке
     });
     
     if (state.autoSortWhitelist) {
       filtered = [...whitelisted, ...others];
-      console.log("[FILTER] After whitelist (sorted):", filtered.length, "whitelisted:", whitelisted.length, "others:", others.length, "whitelist:", state.whitelist);
     } else {
       filtered = whitelisted.length > 0 ? whitelisted : filtered;
-      console.log("[FILTER] After whitelist (filtered):", filtered.length, "whitelisted:", whitelisted.length, "whitelist:", state.whitelist);
     }
   }
 
@@ -1366,30 +1430,45 @@ function renderBlacklist() {
   
   container.innerHTML = state.blacklist
     .map(
-      (symbol) => `
+      (item, index) => {
+        const symbol = typeof item === 'string' ? item : item.symbol;
+        const exchange = typeof item === 'string' ? null : item.exchange;
+        const displayText = exchange ? `${symbol} (${exchange})` : symbol;
+        return `
     <div class="list-item">
-      <span>${symbol}</span>
-      <button class="btn btn-small btn-danger" onclick="removeFromBlacklist('${symbol}')">Удалить</button>
+      <span>${displayText}</span>
+      <button class="btn btn-small btn-danger" onclick="removeFromBlacklist(${index})">Удалить</button>
     </div>
-  `
+  `;
+      }
     )
     .join("");
 }
 
-function addToBlacklist(symbol) {
+function addToBlacklist(symbol, exchange = null) {
   const upperSymbol = symbol.toUpperCase().trim();
   if (!upperSymbol) return;
   
-  if (!state.blacklist.includes(upperSymbol)) {
-    state.blacklist.push(upperSymbol);
+  const newItem = { symbol: upperSymbol, exchange: exchange ? exchange.toLowerCase() : null };
+  
+  // Проверяем, нет ли уже такой записи
+  const exists = state.blacklist.some(item => {
+    const itemSymbol = typeof item === 'string' ? item : item.symbol;
+    const itemExchange = typeof item === 'string' ? null : item.exchange;
+    return itemSymbol === upperSymbol && 
+           (itemExchange === null && exchange === null || itemExchange === exchange?.toLowerCase());
+  });
+  
+  if (!exists) {
+    state.blacklist.push(newItem);
     localStorage.setItem("arbitrage_blacklist", JSON.stringify(state.blacklist));
     renderBlacklist();
     renderOpportunities(state.opportunities);
   }
 }
 
-function removeFromBlacklist(symbol) {
-  state.blacklist = state.blacklist.filter((s) => s !== symbol);
+function removeFromBlacklist(index) {
+  state.blacklist.splice(index, 1);
   localStorage.setItem("arbitrage_blacklist", JSON.stringify(state.blacklist));
   renderBlacklist();
   renderOpportunities(state.opportunities);
@@ -1399,19 +1478,26 @@ window.removeFromBlacklist = removeFromBlacklist;
 
 document.getElementById("add-blacklist-btn").addEventListener("click", () => {
   const input = document.getElementById("blacklist-input");
+  const exchangeSelect = document.getElementById("blacklist-exchange");
   const symbol = input.value.trim();
   if (symbol) {
-    addToBlacklist(symbol);
+    const exchange = exchangeSelect.value === "all" ? null : exchangeSelect.value;
+    addToBlacklist(symbol, exchange);
     input.value = "";
+    exchangeSelect.value = "all";
   }
 });
 
 document.getElementById("blacklist-input").addEventListener("keypress", (e) => {
   if (e.key === "Enter") {
-    const symbol = e.target.value.trim();
+    const input = document.getElementById("blacklist-input");
+    const exchangeSelect = document.getElementById("blacklist-exchange");
+    const symbol = input.value.trim();
     if (symbol) {
-      addToBlacklist(symbol);
-      e.target.value = "";
+      const exchange = exchangeSelect.value === "all" ? null : exchangeSelect.value;
+      addToBlacklist(symbol, exchange);
+      input.value = "";
+      exchangeSelect.value = "all";
     }
   }
 });
@@ -1428,30 +1514,45 @@ function renderWhitelist() {
   
   container.innerHTML = state.whitelist
     .map(
-      (symbol) => `
+      (item, index) => {
+        const symbol = typeof item === 'string' ? item : item.symbol;
+        const exchange = typeof item === 'string' ? null : item.exchange;
+        const displayText = exchange ? `${symbol} (${exchange})` : symbol;
+        return `
     <div class="list-item">
-      <span>${symbol}</span>
-      <button class="btn btn-small btn-danger" onclick="removeFromWhitelist('${symbol}')">Удалить</button>
+      <span>${displayText}</span>
+      <button class="btn btn-small btn-danger" onclick="removeFromWhitelist(${index})">Удалить</button>
     </div>
-  `
+  `;
+      }
     )
     .join("");
 }
 
-function addToWhitelist(symbol) {
+function addToWhitelist(symbol, exchange = null) {
   const upperSymbol = symbol.toUpperCase().trim();
   if (!upperSymbol) return;
   
-  if (!state.whitelist.includes(upperSymbol)) {
-    state.whitelist.push(upperSymbol);
+  const newItem = { symbol: upperSymbol, exchange: exchange ? exchange.toLowerCase() : null };
+  
+  // Проверяем, нет ли уже такой записи
+  const exists = state.whitelist.some(item => {
+    const itemSymbol = typeof item === 'string' ? item : item.symbol;
+    const itemExchange = typeof item === 'string' ? null : item.exchange;
+    return itemSymbol === upperSymbol && 
+           (itemExchange === null && exchange === null || itemExchange === exchange?.toLowerCase());
+  });
+  
+  if (!exists) {
+    state.whitelist.push(newItem);
     localStorage.setItem("arbitrage_whitelist", JSON.stringify(state.whitelist));
     renderWhitelist();
     renderOpportunities(state.opportunities);
   }
 }
 
-function removeFromWhitelist(symbol) {
-  state.whitelist = state.whitelist.filter((s) => s !== symbol);
+function removeFromWhitelist(index) {
+  state.whitelist.splice(index, 1);
   localStorage.setItem("arbitrage_whitelist", JSON.stringify(state.whitelist));
   renderWhitelist();
   renderOpportunities(state.opportunities);
@@ -1461,19 +1562,26 @@ window.removeFromWhitelist = removeFromWhitelist;
 
 document.getElementById("add-whitelist-btn").addEventListener("click", () => {
   const input = document.getElementById("whitelist-input");
+  const exchangeSelect = document.getElementById("whitelist-exchange");
   const symbol = input.value.trim();
   if (symbol) {
-    addToWhitelist(symbol);
+    const exchange = exchangeSelect.value === "all" ? null : exchangeSelect.value;
+    addToWhitelist(symbol, exchange);
     input.value = "";
+    exchangeSelect.value = "all";
   }
 });
 
 document.getElementById("whitelist-input").addEventListener("keypress", (e) => {
   if (e.key === "Enter") {
-    const symbol = e.target.value.trim();
+    const input = document.getElementById("whitelist-input");
+    const exchangeSelect = document.getElementById("whitelist-exchange");
+    const symbol = input.value.trim();
     if (symbol) {
-      addToWhitelist(symbol);
-      e.target.value = "";
+      const exchange = exchangeSelect.value === "all" ? null : exchangeSelect.value;
+      addToWhitelist(symbol, exchange);
+      input.value = "";
+      exchangeSelect.value = "all";
     }
   }
 });

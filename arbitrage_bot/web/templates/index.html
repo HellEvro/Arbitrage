@@ -335,9 +335,17 @@
           <!-- Черный список -->
           <div class="list-management" style="margin-top: 2rem;">
             <h2>Черный список монет</h2>
-            <p class="help-text">Монеты из этого списка не будут отображаться в основной таблице</p>
-            <div class="add-item-form">
-              <input type="text" id="blacklist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+            <p class="help-text">Монеты из этого списка не будут отображаться в основной таблице. Можно указать конкретную биржу или выбрать "Все биржи"</p>
+            <div class="add-item-form" style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="text" id="blacklist-input" placeholder="Введите символ монеты (например, BTCUSDT)" style="flex: 1;" />
+              <select id="blacklist-exchange" style="padding: 0.5rem; border-radius: 4px; border: 1px solid #ddd;">
+                <option value="all">Все биржи</option>
+                <option value="bybit">Bybit</option>
+                <option value="mexc">MEXC</option>
+                <option value="bitget">Bitget</option>
+                <option value="okx">OKX</option>
+                <option value="kucoin">KuCoin</option>
+              </select>
               <button id="add-blacklist-btn" class="btn btn-primary">Добавить</button>
             </div>
             <div id="blacklist-items" class="list-items"></div>
@@ -346,9 +354,17 @@
           <!-- Белый список -->
           <div class="list-management" style="margin-top: 2rem;">
             <h2>Белый список монет</h2>
-            <p class="help-text">Монеты из этого списка будут показываться в приоритете вверху таблицы</p>
-            <div class="add-item-form">
-              <input type="text" id="whitelist-input" placeholder="Введите символ монеты (например, BTCUSDT)" />
+            <p class="help-text">Монеты из этого списка будут показываться в приоритете вверху таблицы. Можно указать конкретную биржу или выбрать "Все биржи"</p>
+            <div class="add-item-form" style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="text" id="whitelist-input" placeholder="Введите символ монеты (например, BTCUSDT)" style="flex: 1;" />
+              <select id="whitelist-exchange" style="padding: 0.5rem; border-radius: 4px; border: 1px solid #ddd;">
+                <option value="all">Все биржи</option>
+                <option value="bybit">Bybit</option>
+                <option value="mexc">MEXC</option>
+                <option value="bitget">Bitget</option>
+                <option value="okx">OKX</option>
+                <option value="kucoin">KuCoin</option>
+              </select>
               <button id="add-whitelist-btn" class="btn btn-primary">Добавить</button>
             </div>
             <div id="whitelist-items" class="list-items"></div>
