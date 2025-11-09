@@ -62,3 +62,30 @@ def save_filtering_config(filtering_config: dict[str, Any]) -> None:
     with config_path.open("w", encoding="utf-8") as fp:
         yaml.dump(data, fp, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+
+def save_profit_config(profit_config: dict[str, Any]) -> None:
+    """Save profit calculation configuration to config.yaml file."""
+    config_path = find_config_path()
+    if not config_path:
+        raise RuntimeError("Config file not found")
+    
+    # Load current config
+    with config_path.open("r", encoding="utf-8") as fp:
+        data = yaml.safe_load(fp) or {}
+    
+    # Update profit-related sections
+    if "notional_usdt_default" in profit_config:
+        data["notional_usdt_default"] = profit_config["notional_usdt_default"]
+    if "slippage_bps" in profit_config:
+        data["slippage_bps"] = profit_config["slippage_bps"]
+    if "thresholds" not in data:
+        data["thresholds"] = {}
+    if "min_profit_usdt" in profit_config:
+        data["thresholds"]["min_profit_usdt"] = profit_config["min_profit_usdt"]
+    if "min_spread_pct" in profit_config:
+        data["thresholds"]["min_spread_pct"] = profit_config["min_spread_pct"]
+    
+    # Save back to file
+    with config_path.open("w", encoding="utf-8") as fp:
+        yaml.dump(data, fp, default_flow_style=False, allow_unicode=True, sort_keys=False)
+

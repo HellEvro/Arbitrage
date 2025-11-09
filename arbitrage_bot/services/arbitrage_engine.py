@@ -39,21 +39,36 @@ class ArbitrageEngine:
     
     def reload_settings(self, new_settings: Settings) -> None:
         """Перезагрузить настройки без перезапуска."""
+        old_notional = self._settings.notional_usdt_default if self._settings else 0
+        old_slippage = self._settings.slippage_bps if self._settings else 0
+        old_min_profit = self._settings.thresholds.min_profit_usdt if self._settings else 0
+        old_min_spread = self._settings.thresholds.min_spread_pct if self._settings else 0
+        
         old_settings = self._settings.filtering.model_dump() if self._settings else {}
         self._settings = new_settings
         self._update_filtering_settings()
         new_settings_dict = new_settings.filtering.model_dump()
+        
         log.info(
-            "Filtering settings reloaded from config. "
+            "Settings reloaded from config. "
+            "Notional: %.0f -> %.0f USDT, "
+            "Slippage: %.1f -> %.1f bps, "
+            "Min profit: %.2f -> %.2f USDT, "
+            "Min spread: %.2f -> %.2f%%, "
             "Same coin ratio: %.2f -> %.2f, "
-            "Price ratio threshold: %.2f -> %.2f, "
-            "Stable window: %.1f -> %.1f min",
+            "Price ratio threshold: %.2f -> %.2f",
+            old_notional,
+            new_settings.notional_usdt_default,
+            old_slippage,
+            new_settings.slippage_bps,
+            old_min_profit,
+            new_settings.thresholds.min_profit_usdt,
+            old_min_spread,
+            new_settings.thresholds.min_spread_pct,
             old_settings.get("same_coin_ratio", 0),
             new_settings_dict.get("same_coin_ratio", 0),
             old_settings.get("price_ratio_threshold", 0),
             new_settings_dict.get("price_ratio_threshold", 0),
-            old_settings.get("stable_window_minutes", 0),
-            new_settings_dict.get("stable_window_minutes", 0),
         )
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:

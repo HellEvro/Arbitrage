@@ -8,7 +8,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
-from arbitrage_bot.config import Settings, load_settings, save_filtering_config
+from arbitrage_bot.config import Settings, load_settings, save_filtering_config, save_profit_config
 from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
 from arbitrage_bot.services.market_discovery import MarketDiscoveryService
 from arbitrage_bot.services.quote_store import QuoteStore
@@ -167,6 +167,79 @@ def create_app(
             "price_diff_suspicious": current_settings.filtering.price_diff_suspicious,
             "price_diff_threshold": current_settings.filtering.price_diff_threshold,
             "price_diff_aggressive": current_settings.filtering.price_diff_aggressive,
+        })
+
+    @app.route("/api/profit-config", methods=["GET", "POST"])
+    def profit_config() -> Any:
+        """Get or save profit calculation configuration."""
+        current_settings = app.config.get("SETTINGS") or settings
+        current_engine = app.config.get("ARBITRAGE_ENGINE") or arbitrage_engine
+        
+        if request.method == "POST":
+            # Сохранение конфига
+            if not current_settings:
+                return jsonify({"error": "Settings not available"}), 500
+            
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                # Валидация данных
+                profit_data = {
+                    "notional_usdt_default": float(data.get("notional_usdt_default", current_settings.notional_usdt_default)),
+                    "slippage_bps": float(data.get("slippage_bps", current_settings.slippage_bps)),
+                    "min_profit_usdt": float(data.get("min_profit_usdt", current_settings.thresholds.min_profit_usdt)),
+                    "min_spread_pct": float(data.get("min_spread_pct", current_settings.thresholds.min_spread_pct)),
+                }
+                
+                # Валидация
+                if profit_data["notional_usdt_default"] < 1:
+                    return jsonify({"error": "Notional USDT must be >= 1"}), 400
+                if profit_data["slippage_bps"] < 0:
+                    return jsonify({"error": "Slippage cannot be negative"}), 400
+                if profit_data["min_profit_usdt"] < 0:
+                    return jsonify({"error": "Min profit cannot be negative"}), 400
+                if profit_data["min_spread_pct"] < 0:
+                    return jsonify({"error": "Min spread cannot be negative"}), 400
+                
+                # Сохраняем в файл
+                save_profit_config(profit_data)
+                log.info("Profit config saved to file: %s", profit_data)
+                
+                # Перезагружаем настройки
+                new_settings = load_settings()
+                log.info("Settings reloaded from file")
+                
+                # Обновляем настройки в engine без перезапуска
+                if current_engine:
+                    current_engine.reload_settings(new_settings)
+                    log.info("ArbitrageEngine settings updated")
+                else:
+                    log.warning("ArbitrageEngine not available, settings not applied")
+                
+                # Обновляем настройки в app.config для следующего запроса
+                app.config["SETTINGS"] = new_settings
+                app.config["ARBITRAGE_ENGINE"] = current_engine
+                log.info("App config updated with new settings")
+                
+                return jsonify({
+                    "success": True, 
+                    "message": "Параметры расчета прибыли сохранены и применены",
+                    "applied": current_engine is not None
+                })
+            except Exception as e:
+                log.exception("Error saving profit config: %s", e)
+                return jsonify({"error": str(e)}), 500
+        
+        # GET запрос - возвращаем текущие настройки
+        if not current_settings:
+            return jsonify({})
+        return jsonify({
+            "notional_usdt_default": current_settings.notional_usdt_default,
+            "slippage_bps": current_settings.slippage_bps,
+            "min_profit_usdt": current_settings.thresholds.min_profit_usdt,
+            "min_spread_pct": current_settings.thresholds.min_spread_pct,
         })
 
     @app.route("/api/exchange-status")

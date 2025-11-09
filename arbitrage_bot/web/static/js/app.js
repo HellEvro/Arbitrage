@@ -23,6 +23,12 @@ const state = {
     price_diff_threshold: 1.0,
     price_diff_aggressive: 2.0,
   },
+  profitConfig: { // Настройки расчета прибыли (загружаются с сервера)
+    notional_usdt_default: 1000,
+    slippage_bps: 3.0,
+    min_profit_usdt: 0.5,
+    min_spread_pct: 0.05,
+  },
 };
 
 console.log("Socket.IO initialized:", socket.connected);
@@ -79,8 +85,44 @@ function updateFilteringConfigUI() {
   if (priceDiffAggressiveInput) priceDiffAggressiveInput.value = cfg.price_diff_aggressive || 2.0;
 }
 
+// Загружаем настройки расчета прибыли с сервера
+async function loadProfitConfig() {
+  try {
+    const response = await fetch("/api/profit-config");
+    if (response.ok) {
+      const config = await response.json();
+      state.profitConfig = { ...state.profitConfig, ...config };
+      console.log("Profit config loaded:", state.profitConfig);
+      // Заполняем поля на странице настроек
+      updateProfitConfigUI();
+    } else {
+      console.warn("Failed to load profit config, using defaults");
+    }
+  } catch (error) {
+    console.error("Error loading profit config:", error);
+  }
+}
+
+// Обновляем UI с настройками расчета прибыли
+function updateProfitConfigUI() {
+  const cfg = state.profitConfig;
+  
+  const notionalInput = document.getElementById("notional-usdt-default");
+  if (notionalInput) notionalInput.value = cfg.notional_usdt_default || 1000;
+  
+  const slippageInput = document.getElementById("slippage-bps");
+  if (slippageInput) slippageInput.value = cfg.slippage_bps || 3.0;
+  
+  const minProfitInput = document.getElementById("min-profit-usdt");
+  if (minProfitInput) minProfitInput.value = cfg.min_profit_usdt || 0.5;
+  
+  const minSpreadInput = document.getElementById("min-spread-pct");
+  if (minSpreadInput) minSpreadInput.value = cfg.min_spread_pct || 0.05;
+}
+
 // Загружаем настройки при инициализации
 loadFilteringConfig();
+loadProfitConfig();
 
 socket.on("connect", () => {
   console.log("WebSocket connected");
@@ -1045,9 +1087,10 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.classList.add("active");
     document.getElementById(`tab-${tabName}`).classList.add("active");
     
-    // Если переключились на вкладку настроек, обновляем значения фильтрации
+    // Если переключились на вкладку настроек, обновляем значения
     if (tabName === "settings") {
       updateFilteringConfigUI();
+      updateProfitConfigUI();
     }
   });
 });
@@ -1345,6 +1388,78 @@ document.getElementById("save-filtering-config-btn")?.addEventListener("click", 
       // Перезагружаем конфиг с сервера для подтверждения
       setTimeout(() => {
         loadFilteringConfig();
+      }, 500);
+    } else {
+      statusEl.textContent = "❌ Ошибка: " + (result.error || "Неизвестная ошибка");
+      statusEl.style.color = "#f85149";
+    }
+  } catch (error) {
+    statusEl.textContent = "❌ Ошибка: " + error.message;
+    statusEl.style.color = "#f85149";
+  } finally {
+    btn.disabled = false;
+    // Очищаем статус через 5 секунд
+    setTimeout(() => {
+      if (statusEl.textContent.includes("✅")) {
+        statusEl.textContent = "";
+      }
+    }, 5000);
+  }
+});
+
+// Сохранение параметров расчета прибыли
+document.getElementById("save-profit-config-btn")?.addEventListener("click", async () => {
+  const statusEl = document.getElementById("profit-config-status");
+  const btn = document.getElementById("save-profit-config-btn");
+  
+  if (!statusEl || !btn) return;
+  
+  // Собираем значения из полей
+  const config = {
+    notional_usdt_default: parseFloat(document.getElementById("notional-usdt-default")?.value || 1000),
+    slippage_bps: parseFloat(document.getElementById("slippage-bps")?.value || 3.0),
+    min_profit_usdt: parseFloat(document.getElementById("min-profit-usdt")?.value || 0.5),
+    min_spread_pct: parseFloat(document.getElementById("min-spread-pct")?.value || 0.05),
+  };
+  
+  // Валидация
+  if (config.notional_usdt_default < 1) {
+    statusEl.textContent = "❌ Ошибка: сумма USDT должна быть >= 1";
+    statusEl.style.color = "#f85149";
+    return;
+  }
+  
+  if (config.slippage_bps < 0 || config.min_profit_usdt < 0 || config.min_spread_pct < 0) {
+    statusEl.textContent = "❌ Ошибка: значения не могут быть отрицательными";
+    statusEl.style.color = "#f85149";
+    return;
+  }
+  
+  btn.disabled = true;
+  statusEl.textContent = "⏳ Сохранение...";
+  statusEl.style.color = "#8b949e";
+  
+  try {
+    const response = await fetch("/api/profit-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      statusEl.textContent = "✅ " + (result.message || "Параметры сохранены и применены");
+      statusEl.style.color = "#238636";
+      
+      // Обновляем state.profitConfig
+      state.profitConfig = { ...state.profitConfig, ...config };
+      
+      // Перезагружаем конфиг с сервера для подтверждения
+      setTimeout(() => {
+        loadProfitConfig();
       }, 500);
     } else {
       statusEl.textContent = "❌ Ошибка: " + (result.error || "Неизвестная ошибка");
