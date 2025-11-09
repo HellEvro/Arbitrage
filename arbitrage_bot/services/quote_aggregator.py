@@ -114,14 +114,6 @@ class QuoteAggregator:
                     
                     canonical = self._reverse_map.get((adapter.name, quote.symbol.upper()))
                     if not canonical:
-                        # Log missing mappings for debugging (only first few times per exchange)
-                        if adapter.name == "kucoin" and quote.symbol.upper() not in getattr(self, '_logged_missing_kucoin', set()):
-                            if not hasattr(self, '_logged_missing_kucoin'):
-                                self._logged_missing_kucoin = set()
-                            self._logged_missing_kucoin.add(quote.symbol.upper())
-                            # Find KuCoin keys in reverse_map
-                            kucoin_keys = [k for k in self._reverse_map.keys() if k[0] == "kucoin"][:10]
-                            log.warning("KuCoin: No mapping found for symbol %s. Sample KuCoin keys in reverse_map: %s", quote.symbol.upper(), kucoin_keys)
                         continue
                     mid_price = (quote.bid + quote.ask) / 2
                     # Получаем base_asset и quote_asset для этого символа
@@ -224,12 +216,6 @@ class QuoteAggregator:
             for exchange, symbol in market.exchange_symbols.items():
                 reverse[(exchange, symbol.upper())] = market.symbol
                 by_exchange.setdefault(exchange, []).append(symbol.upper())
-        
-        # Log KuCoin mappings for debugging
-        kucoin_mappings = [(k, v) for k, v in reverse.items() if k[0] == "kucoin"][:10]
-        if kucoin_mappings:
-            log.info("KuCoin mappings sample: %s", kucoin_mappings)
-        
         self._reverse_map = reverse
         self._symbols_by_exchange = by_exchange
         self._symbol_to_assets = symbol_to_assets

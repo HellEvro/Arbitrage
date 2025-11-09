@@ -51,9 +51,6 @@ class KucoinAdapter(BaseAdapter):
             return
         
         self._log.info("Starting quote stream for %d KuCoin symbols", len(watched_kucoin))
-        # Log sample symbols for debugging
-        sample_watched = list(watched_kucoin)[:5]
-        self._log.info("Sample watched KuCoin symbols: %s", sample_watched)
         
         while not self.closed:
             try:
@@ -66,7 +63,6 @@ class KucoinAdapter(BaseAdapter):
                     continue
                 
                 ts = int(data.get("data", {}).get("time", time.time() * 1000))
-                matched_count = 0
                 
                 for item in entries:
                     symbol_kucoin = item.get("symbol", "").upper()
@@ -80,19 +76,6 @@ class KucoinAdapter(BaseAdapter):
                     if bid > 0 and ask > 0:
                         # Yield with KuCoin format symbol - quote_aggregator will map it correctly
                         yield ExchangeQuote(symbol=symbol_kucoin, bid=bid, ask=ask, timestamp_ms=ts)
-                        matched_count += 1
-                
-                if matched_count == 0:
-                    # Log sample symbols for debugging
-                    sample_entries = [item.get("symbol", "").upper() for item in entries[:10]]
-                    self._log.warning(
-                        "KuCoin: No matching symbols found. Watched: %s (total: %d), "
-                        "Sample from API: %s (total entries: %d)",
-                        sample_watched,
-                        len(watched_kucoin),
-                        sample_entries,
-                        len(entries)
-                    )
                     
             except Exception as e:
                 self._log.warning("Failed to fetch quotes from KuCoin: %s (will retry)", e)
