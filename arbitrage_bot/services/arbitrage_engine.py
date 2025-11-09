@@ -121,6 +121,10 @@ class ArbitrageEngine:
         filtered_by_stale = 0
         filtered_by_price = 0
         
+        # Получаем пороги из настроек для фильтрации
+        MIN_PRICE_THRESHOLD = self._settings.filtering.min_price_threshold
+        PRICE_RATIO_THRESHOLD = self._settings.filtering.price_ratio_threshold
+        
         # Функция для извлечения базового корня из base_asset
         def extract_base_root(base_asset: str | None) -> str:
             """Извлекает базовый корень, убирая известные суффиксы."""
@@ -309,8 +313,7 @@ class ArbitrageEngine:
             min_price_all = min(all_prices)
             max_price_all = max(all_prices)
             # Проверяем, не являются ли это разные монеты (слишком большая разница в ценах)
-            MIN_PRICE_THRESHOLD = self._settings.filtering.min_price_threshold
-            PRICE_RATIO_THRESHOLD = self._settings.filtering.price_ratio_threshold
+            # Пороги уже определены в начале функции
             
             # Если одна цена очень маленькая, а другая нормальная - это разные монеты
             has_near_zero = min_price_all < MIN_PRICE_THRESHOLD and max_price_all >= MIN_PRICE_THRESHOLD
@@ -321,12 +324,13 @@ class ArbitrageEngine:
             # Пропускаем весь символ, не создавая никаких возможностей
             if has_near_zero or price_ratio_all > PRICE_RATIO_THRESHOLD:
                 filtered_by_price += len(exchanges_list) * (len(exchanges_list) - 1)  # Примерная оценка отфильтрованных пар
-                log.debug(
-                    "Skipping symbol %s entirely: price range %.8f - %.8f (ratio=%.2f, has_near_zero=%s) - different coins",
+                log.info(
+                    "[FILTER] Skipping symbol %s entirely: price range %.8f - %.8f (ratio=%.2f > %.2f, has_near_zero=%s) - different coins",
                     snapshot.symbol,
                     min_price_all,
                     max_price_all,
                     price_ratio_all,
+                    PRICE_RATIO_THRESHOLD,
                     has_near_zero,
                 )
                 continue
@@ -357,6 +361,18 @@ class ArbitrageEngine:
                     # Если одна цена очень маленькая, а другая нормальная - это разные монеты
                     if (buy_is_near_zero and not sell_is_near_zero) or (not buy_is_near_zero and sell_is_near_zero):
                         filtered_by_price += 1
+                        log.info(
+                            "[FILTER] Filtered opportunity %s: %s@%.8f -> %s@%.8f (one price near zero: buy=%.8f < %.8f, sell=%.8f < %.8f)",
+                            snapshot.symbol,
+                            buy_exchange,
+                            buy_price,
+                            sell_exchange,
+                            sell_price,
+                            buy_price,
+                            MIN_PRICE_THRESHOLD,
+                            sell_price,
+                            MIN_PRICE_THRESHOLD,
+                        )
                         continue
                     
                     # Если цена в 1.5+ раза больше - это разные монеты (строгая фильтрация)
@@ -364,8 +380,8 @@ class ArbitrageEngine:
                     # Порог 1.5x выбран для максимальной строгости - даже небольшие различия могут указывать на разные монеты
                     if pair_price_ratio > PRICE_RATIO_THRESHOLD:
                         filtered_by_price += 1
-                        log.debug(
-                            "Filtered opportunity %s: %s@%.8f -> %s@%.8f (ratio=%.2f > %.2f, different coins)",
+                        log.info(
+                            "[FILTER] Filtered opportunity %s: %s@%.8f -> %s@%.8f (ratio=%.2f > %.2f, different coins)",
                             snapshot.symbol,
                             buy_exchange,
                             buy_price,
@@ -445,9 +461,9 @@ class ArbitrageEngine:
         
         # Логируем статистику фильтрации
         valid_snapshots = total_snapshots - filtered_by_exchanges - filtered_by_stale - filtered_by_price
-        log.debug(
-            "Snapshot filtering stats: total=%d, valid=%d, "
-            "filtered_by_exchanges=%d (<2 exchanges), filtered_by_stale=%d (>%dms old), filtered_by_price=%d (invalid), "
+        log.info(
+            "[FILTER STATS] Snapshot filtering: total=%d, valid=%d, "
+            "filtered_by_exchanges=%d (<2 exchanges), filtered_by_stale=%d (>%dms old), filtered_by_price=%d (price ratio > %.2f or near zero), "
             "opportunities=%d",
             total_snapshots,
             valid_snapshots,
@@ -455,6 +471,7 @@ class ArbitrageEngine:
             filtered_by_stale,
             stale_threshold_ms,
             filtered_by_price,
+            PRICE_RATIO_THRESHOLD,
             len(results),
         )
         
