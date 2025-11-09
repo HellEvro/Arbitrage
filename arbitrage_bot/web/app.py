@@ -11,6 +11,7 @@ from flask_socketio import SocketIO
 from arbitrage_bot.config import Settings, load_settings, save_filtering_config, save_profit_config
 from arbitrage_bot.services.arbitrage_engine import ArbitrageEngine
 from arbitrage_bot.services.market_discovery import MarketDiscoveryService
+from arbitrage_bot.services.quote_aggregator import QuoteAggregator
 from arbitrage_bot.services.quote_store import QuoteStore
 from arbitrage_bot.services.telegram_notifier import TelegramNotifier
 
@@ -267,6 +268,119 @@ def create_app(
             for name, status in statuses.items()
         }
         return jsonify(payload)
+
+    @app.route("/api/test-exchange/<exchange_name>", methods=["POST"])
+    def test_exchange(exchange_name: str) -> Any:
+        """Test exchange connection and return detailed results."""
+        from arbitrage_bot.bootstrap import create_adapters
+        from arbitrage_bot.core import HttpClientFactory
+        
+        current_settings = app.config.get("SETTINGS") or settings
+        if not current_settings:
+            return jsonify({"error": "Settings not available"}), 500
+        
+        if exchange_name not in current_settings.exchanges:
+            return jsonify({"error": f"Exchange {exchange_name} not configured"}), 404
+        
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            async def run_test():
+                http_factory = HttpClientFactory()
+                try:
+                    # Создаем адаптер для тестирования
+                    adapters = create_adapters(current_settings, http_factory)
+                    adapter = next((a for a in adapters if a.name == exchange_name), None)
+                    
+                    if not adapter:
+                        return {"error": f"Adapter for {exchange_name} not found"}
+                    
+                    results = {
+                        "exchange": exchange_name,
+                        "tests": [],
+                        "success": True,
+                        "summary": ""
+                    }
+                    
+                    # Тест 1: fetch_markets
+                    try:
+                        markets = await adapter.fetch_markets()
+                        results["tests"].append({
+                            "name": "fetch_markets",
+                            "success": True,
+                            "message": f"Получено {len(markets)} рынков",
+                            "details": {
+                                "markets_count": len(markets),
+                                "sample_symbols": [m.symbol for m in markets[:5]] if markets else []
+                            }
+                        })
+                    except Exception as e:
+                        results["success"] = False
+                        results["tests"].append({
+                            "name": "fetch_markets",
+                            "success": False,
+                            "message": f"Ошибка: {str(e)}",
+                            "details": {"error": str(e)}
+                        })
+                    
+                    # Тест 2: quote_stream (если есть рынки)
+                    if results["tests"][0]["success"] and results["tests"][0]["details"]["markets_count"] > 0:
+                        test_symbols = [markets[0].symbol, markets[1].symbol if len(markets) > 1 else markets[0].symbol]
+                        try:
+                            quote_count = 0
+                            async for quote in adapter.quote_stream(test_symbols):
+                                quote_count += 1
+                                if quote_count >= 2:
+                                    break
+                            
+                            if quote_count > 0:
+                                results["tests"].append({
+                                    "name": "quote_stream",
+                                    "success": True,
+                                    "message": f"Получено {quote_count} котировок",
+                                    "details": {
+                                        "quotes_received": quote_count,
+                                        "test_symbols": test_symbols
+                                    }
+                                })
+                            else:
+                                results["success"] = False
+                                results["tests"].append({
+                                    "name": "quote_stream",
+                                    "success": False,
+                                    "message": "Не получено ни одной котировки",
+                                    "details": {"test_symbols": test_symbols}
+                                })
+                        except Exception as e:
+                            results["success"] = False
+                            results["tests"].append({
+                                "name": "quote_stream",
+                                "success": False,
+                                "message": f"Ошибка: {str(e)}",
+                                "details": {"error": str(e)}
+                            })
+                    
+                    # Формируем summary
+                    passed = sum(1 for t in results["tests"] if t["success"])
+                    total = len(results["tests"])
+                    results["summary"] = f"Пройдено тестов: {passed}/{total}"
+                    
+                    await adapter.close()
+                    await http_factory.close()
+                    return results
+                except Exception as e:
+                    return {"error": str(e), "exchange": exchange_name}
+            
+            result = loop.run_until_complete(run_test())
+            return jsonify(result)
+        except Exception as e:
+            log.exception("Error testing exchange %s: %s", exchange_name, e)
+            return jsonify({"error": str(e), "exchange": exchange_name}), 500
 
     @app.route("/")
     def index() -> Any:

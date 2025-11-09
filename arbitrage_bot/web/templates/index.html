@@ -337,6 +337,23 @@
         </div>
       </div>
     </main>
+    
+    <!-- Модальное окно для результатов теста биржи -->
+    <div id="exchange-test-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="exchange-test-title">Тест подключения к бирже</h2>
+          <span class="modal-close" onclick="closeExchangeTestModal()">&times;</span>
+        </div>
+        <div class="modal-body" id="exchange-test-body">
+          <!-- Результаты теста будут здесь -->
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" onclick="closeExchangeTestModal()">Закрыть</button>
+        </div>
+      </div>
+    </div>
+    
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   </body>
 </html>

@@ -586,6 +586,174 @@ a:hover {
   display: none; /* Скрываем ошибки в компактном режиме */
 }
 
+.exchange-status-item-clickable {
+  transition: background-color 0.2s, opacity 0.2s;
+}
+
+.exchange-status-item-clickable:hover {
+  background-color: #21262d;
+  opacity: 1 !important;
+}
+
+/* Модальное окно для теста биржи */
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(2px);
+}
+
+.modal-content {
+  background-color: #161b22;
+  margin: 5% auto;
+  padding: 0;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 600px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid #30363d;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #e6edf3;
+  font-size: 1.5rem;
+}
+
+.modal-close {
+  color: #8b949e;
+  font-size: 2rem;
+  font-weight: bold;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.modal-close:hover {
+  color: #e6edf3;
+}
+
+.modal-body {
+  padding: 1.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  color: #e6edf3;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #30363d;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Стили для результатов теста */
+.test-result {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #0d1117;
+  border-radius: 6px;
+  border-left: 4px solid #30363d;
+}
+
+.test-result.success {
+  border-left-color: #238636;
+}
+
+.test-result.failure {
+  border-left-color: #da3633;
+}
+
+.test-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.test-result-message {
+  color: #c9d1d9;
+  margin-bottom: 0.5rem;
+}
+
+.test-result-details {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #21262d;
+  font-size: 0.9rem;
+  color: #8b949e;
+}
+
+.test-result-details strong {
+  color: #c9d1d9;
+}
+
+.test-summary {
+  padding: 1rem;
+  background-color: #0d1117;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  text-align: center;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.test-summary.success {
+  color: #238636;
+  border: 1px solid #238636;
+}
+
+.test-summary.failure {
+  color: #da3633;
+  border: 1px solid #da3633;
+}
+
+.test-loading {
+  text-align: center;
+  padding: 2rem;
+  color: #8b949e;
+}
+
+.test-loading::after {
+  content: "...";
+  animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+  0%, 20% { content: "."; }
+  40% { content: ".."; }
+  60%, 100% { content: "..."; }
+}
+
 /* Компактные но читаемые колонки */
 #ranking-table th:nth-child(1), #ranking-table td:nth-child(1) { min-width: 80px; max-width: 100px; } /* Монета */
 #ranking-table th:nth-child(2), #ranking-table td:nth-child(2) { min-width: 65px; max-width: 80px; } /* Биржа min */

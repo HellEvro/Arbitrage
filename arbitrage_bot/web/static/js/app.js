@@ -1526,9 +1526,15 @@ function renderExchangeStatus(statuses) {
       }
       
       const tooltip = `${status.connected ? '✅ Подключено' : '❌ Отключено'} • ${details.join(' • ')}`;
+      const clickableClass = !status.connected ? 'exchange-status-item-clickable' : '';
+      const testHint = !status.connected ? ' (нажмите для теста)' : '';
       
       return `
-        <div class="exchange-status-item" title="${tooltip}">
+        <div class="exchange-status-item ${clickableClass}" 
+             data-exchange="${status.name}" 
+             title="${tooltip}${testHint}"
+             ${!status.connected ? 'onclick="testExchange(\'' + status.name + '\')"' : ''}
+             style="${!status.connected ? 'cursor: pointer; opacity: 0.8;' : ''}">
           <div class="exchange-status-indicator ${status.connected ? "connected" : "disconnected"}"></div>
           <span class="exchange-status-name">${status.name.toUpperCase()}</span>
           <span class="exchange-status-details">
@@ -1536,11 +1542,149 @@ function renderExchangeStatus(statuses) {
             ${coinCount > 0 ? `${formattedCount} монет` : '0 монет'} 
             ${ageText ? ` • ${ageText}` : ''}
             ${status.error_count > 0 ? ` • ⚠️${status.error_count}` : ''}
+            ${!status.connected ? ' <span style="color: #58a6ff; font-size: 0.85em;">[Тест]</span>' : ''}
           </span>
         </div>
       `;
     })
     .join("");
+}
+
+// Тестирование биржи
+async function testExchange(exchangeName) {
+  const modal = document.getElementById("exchange-test-modal");
+  const title = document.getElementById("exchange-test-title");
+  const body = document.getElementById("exchange-test-body");
+  
+  if (!modal || !title || !body) {
+    console.error("Modal elements not found");
+    return;
+  }
+  
+  // Показываем модальное окно
+  modal.style.display = "block";
+  title.textContent = `Тест подключения к бирже ${exchangeName.toUpperCase()}`;
+  body.innerHTML = '<div class="test-loading">Выполняется тест подключения</div>';
+  
+  try {
+    const response = await fetch(`/api/test-exchange/${exchangeName}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(result.error || "Ошибка при выполнении теста");
+    }
+    
+    // Отображаем результаты
+    let html = "";
+    
+    if (result.error) {
+      html = `
+        <div class="test-result failure">
+          <div class="test-result-header">
+            <span style="color: #da3633;">❌</span>
+            <span>Ошибка</span>
+          </div>
+          <div class="test-result-message">${result.error}</div>
+        </div>
+      `;
+    } else {
+      // Summary
+      const summaryClass = result.success ? "success" : "failure";
+      html += `
+        <div class="test-summary ${summaryClass}">
+          ${result.success ? "✅" : "❌"} ${result.summary || "Тест завершен"}
+        </div>
+      `;
+      
+      // Детали каждого теста
+      if (result.tests && result.tests.length > 0) {
+        for (const test of result.tests) {
+          const testClass = test.success ? "success" : "failure";
+          let detailsHtml = "";
+          
+          if (test.details) {
+            const details = [];
+            if (test.details.markets_count !== undefined) {
+              details.push(`<strong>Рынков:</strong> ${test.details.markets_count}`);
+            }
+            if (test.details.sample_symbols && test.details.sample_symbols.length > 0) {
+              details.push(`<strong>Примеры:</strong> ${test.details.sample_symbols.join(", ")}`);
+            }
+            if (test.details.quotes_received !== undefined) {
+              details.push(`<strong>Котировок получено:</strong> ${test.details.quotes_received}`);
+            }
+            if (test.details.test_symbols && test.details.test_symbols.length > 0) {
+              details.push(`<strong>Тестовые символы:</strong> ${test.details.test_symbols.join(", ")}`);
+            }
+            if (test.details.error) {
+              details.push(`<strong>Ошибка:</strong> ${test.details.error}`);
+            }
+            
+            if (details.length > 0) {
+              detailsHtml = `<div class="test-result-details">${details.join("<br>")}</div>`;
+            }
+          }
+          
+          html += `
+            <div class="test-result ${testClass}">
+              <div class="test-result-header">
+                <span style="color: ${test.success ? "#238636" : "#da3633"};">${test.success ? "✅" : "❌"}</span>
+                <span>${test.name}</span>
+              </div>
+              <div class="test-result-message">${test.message}</div>
+              ${detailsHtml}
+            </div>
+          `;
+        }
+      }
+    }
+    
+    body.innerHTML = html;
+    
+    // Обновляем статус бирж после теста
+    setTimeout(() => {
+      fetch("/api/exchange-status")
+        .then(res => res.json())
+        .then(statusData => {
+          state.exchangeStatuses = statusData || {};
+          renderExchangeStatus(statusData);
+        })
+        .catch(err => console.error("Error refreshing exchange status:", err));
+    }, 1000);
+    
+  } catch (error) {
+    body.innerHTML = `
+      <div class="test-result failure">
+        <div class="test-result-header">
+          <span style="color: #da3633;">❌</span>
+          <span>Ошибка</span>
+        </div>
+        <div class="test-result-message">${error.message}</div>
+      </div>
+    `;
+  }
+}
+
+// Закрытие модального окна
+function closeExchangeTestModal() {
+  const modal = document.getElementById("exchange-test-modal");
+  if (modal) {
+    modal.style.display = "none";
+  }
+}
+
+// Закрытие модального окна при клике вне его
+window.onclick = function(event) {
+  const modal = document.getElementById("exchange-test-modal");
+  if (event.target === modal) {
+    closeExchangeTestModal();
+  }
 }
 
 // Инициализация
