@@ -29,7 +29,6 @@ class ArbitrageEngine:
         self._latest: list[ArbitrageOpportunity] = []
 
     async def evaluate(self) -> list[ArbitrageOpportunity]:
-        # КРИТИЧНО: list() теперь НЕ блокируется - чтение полностью независимо от записи!
         snapshots = await self._quote_store.list()
         snapshot_list = list(snapshots)
         log.debug("Evaluating %d quote snapshots", len(snapshot_list))
@@ -112,15 +111,9 @@ class ArbitrageEngine:
                     notional = self._settings.notional_usdt_default
                     quantity = notional / buy_price
 
-                    # Get fees - prefer fee_fetcher, fallback to config, then default
-                    if self._fee_fetcher:
-                        buy_fee_info = await self._fee_fetcher.get_fee(buy_exchange, snapshot.symbol)
-                        sell_fee_info = await self._fee_fetcher.get_fee(sell_exchange, snapshot.symbol)
-                        fee_buy_rate = buy_fee_info.taker
-                        fee_sell_rate = sell_fee_info.taker
-                        buy_fee_pct = fee_buy_rate * 100  # Convert to percentage for display
-                        sell_fee_pct = fee_sell_rate * 100
-                    elif buy_exchange in self._settings.fees:
+                    # Get fees - use config first (fast, no blocking), then default
+                    # КРИТИЧНО: Используем fees из настроек для скорости - fee_fetcher может блокировать!
+                    if buy_exchange in self._settings.fees:
                         fee_buy_rate = self._settings.fees[buy_exchange].taker
                         fee_sell_rate = self._settings.fees[sell_exchange].taker if sell_exchange in self._settings.fees else 0.001
                         buy_fee_pct = fee_buy_rate * 100
