@@ -486,16 +486,30 @@ class ArbitrageManagerApp:
         python = self.launcher.python_in_venv()
         if python.exists():
             return str(python)
-        return sys.executable or shutil.which("python3") or "python"
+        return self._system_python()
+
+    def _system_python(self) -> str:
+        base_executable = getattr(sys, "_base_executable", None)
+        if base_executable:
+            return base_executable
+        if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+            suffix = "Scripts/python.exe" if os.name == "nt" else "bin/python3"
+            candidate = Path(getattr(sys, "base_prefix", sys.prefix)) / suffix
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("python3") or shutil.which("python") or sys.executable
 
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
 
     def _create_or_update_venv(self) -> None:
-        python = sys.executable or shutil.which("python3") or "python"
+        python = self._system_python()
+        self._append_log("system", "Создание виртуального окружения (.venv)")
         self._run_command([python, "-m", "venv", str(self.launcher.venv_path)], "system", "Создание окружения")
         self._venv_bootstrap_done = False
+        python_version = subprocess.check_output([python, "-c", "import sys; print(sys.version)"], text=True).strip()
+        self._append_log("system", f"Используется интерпретатор: {python} (версия: {python_version})")
 
     def _remove_venv(self) -> None:
         if not self.launcher.venv_path.exists():
@@ -507,7 +521,7 @@ class ArbitrageManagerApp:
         self._venv_bootstrap_done = False
 
     def _install_system_dependencies(self) -> None:
-        python = sys.executable or shutil.which("python3") or "python"
+        python = self._system_python()
         self._run_command(
             [python, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
             "system",
@@ -714,15 +728,17 @@ class ArbitrageManagerApp:
             return
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
-            geometry = data.get("geometry")
-            if geometry:
-                self.root.geometry(geometry)
+            size = data.get("size")
+            if size:
+                self.root.geometry(size)
         except Exception:  # noqa: BLE001
             pass
 
     def _save_window_geometry(self) -> None:
         try:
-            data = {"geometry": self.root.geometry()}
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+            data = {"size": f"{width}x{height}"}
             self.state_path.write_text(json.dumps(data), encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
