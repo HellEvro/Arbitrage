@@ -33,6 +33,36 @@ if str(CURRENT_DIR) not in sys.path:
 from arbitrage_launcher import ArbitrageLauncher  # noqa: E402
 
 
+def _system_python_executable() -> str:
+    base_executable = getattr(sys, "_base_executable", None)
+    if base_executable:
+        return base_executable
+
+    base_prefix = getattr(sys, "base_prefix", sys.prefix)
+    if sys.prefix != base_prefix:
+        suffix = "Scripts\\python.exe" if os.name == "nt" else "bin/python3"
+        candidate = Path(base_prefix) / suffix
+        if candidate.exists():
+            return str(candidate)
+
+    return shutil.which("python3") or shutil.which("python") or sys.executable
+
+
+def _ensure_running_outside_venv() -> None:
+    base_prefix = getattr(sys, "base_prefix", sys.prefix)
+    if sys.prefix == base_prefix:
+        return
+
+    if os.environ.get("ARBITRAGE_MANAGER_REEXEC") == "1":
+        return
+
+    base_python = _system_python_executable()
+    env = os.environ.copy()
+    env["ARBITRAGE_MANAGER_REEXEC"] = "1"
+    script_path = Path(__file__).resolve()
+    os.execve(base_python, [base_python, str(script_path), *sys.argv[1:]], env)
+
+
 def quote(arg: str) -> str:
     if not arg:
         return '""'
@@ -486,27 +516,25 @@ class ArbitrageManagerApp:
         python = self.launcher.python_in_venv()
         if python.exists():
             return str(python)
-        return self._system_python()
-
-    def _system_python(self) -> str:
-        base_executable = getattr(sys, "_base_executable", None)
-        if base_executable:
-            return base_executable
-        if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
-            suffix = "Scripts/python.exe" if os.name == "nt" else "bin/python3"
-            candidate = Path(getattr(sys, "base_prefix", sys.prefix)) / suffix
-            if candidate.exists():
-                return str(candidate)
-        return shutil.which("python3") or shutil.which("python") or sys.executable
+        return _system_python_executable()
 
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
 
     def _create_or_update_venv(self) -> None:
-        python = self._system_python()
+        python = _system_python_executable()
         self._append_log("system", "Создание виртуального окружения (.venv)")
-        self._run_command([python, "-m", "venv", str(self.launcher.venv_path)], "system", "Создание окружения")
+        try:
+            self._run_command([python, "-m", "venv", str(self.launcher.venv_path)], "system", "Создание окружения")
+        except RuntimeError as exc:
+            if self.launcher.venv_path.exists():
+                self._append_log(
+                    "system",
+                    "Создание окружения не удалось. Удаляю повреждённую папку .venv и пробую ещё раз...",
+                )
+                shutil.rmtree(self.launcher.venv_path, ignore_errors=True)
+            self._run_command([python, "-m", "venv", str(self.launcher.venv_path)], "system", "Создание окружения")
         self._venv_bootstrap_done = False
         python_version = subprocess.check_output([python, "-c", "import sys; print(sys.version)"], text=True).strip()
         self._append_log("system", f"Используется интерпретатор: {python} (версия: {python_version})")
@@ -521,7 +549,7 @@ class ArbitrageManagerApp:
         self._venv_bootstrap_done = False
 
     def _install_system_dependencies(self) -> None:
-        python = self._system_python()
+        python = _system_python_executable()
         self._run_command(
             [python, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
             "system",
@@ -771,6 +799,7 @@ class ArbitrageManagerApp:
 
 
 def main() -> None:
+    _ensure_running_outside_venv()
     ArbitrageManagerApp().run()
 
 
